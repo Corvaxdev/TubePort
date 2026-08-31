@@ -2,7 +2,7 @@
   "schema": 1,
   "application": {
     "name": "TubePort",
-    "version": "2.1.1",
+    "version": "2.1.2",
     "license": "MIT",
     "copyright": "Copyright (c) 2026 nanomicron"
   },

@@ -1,4 +1,4 @@
-TubePort 2.1.1 — Quick Start
+TubePort 2.1.2 — Quick Start
 ================================
 
 1. Extract the entire ZIP archive.
@@ -22,8 +22,9 @@ do not share it with anyone, and delete it when it is no longer needed. Cookies
 are not included in the package.
 
 Windows and Chromium:
-- “Failed to copy the cookie database” — completely close the browser, including
-  its background processes, then try again.
+- “Failed to copy the cookie database” — a browser or background process may be
+  using the file. Close that browser completely and try again. TubePort only
+  reports this after yt-dlp actually fails to copy the database.
 - A decryption error mentioning DPAPI, v20, or App-Bound — closing the browser
   will not help. Use a fresh cookies.txt file or another supported browser.
 - Do not run TubePort as an administrator or disable browser security.

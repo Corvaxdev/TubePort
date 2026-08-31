@@ -13,7 +13,7 @@ audio from supported YouTube video URLs and Instagram Reel URLs. It provides a
 small graphical interface over locally installed command-line media tools and includes
 local diagnostics for common authentication and packaging failures.
 
-Current version: **2.1.1**
+Current version: **2.1.2**
 Supported release platform: **Windows 10/11 x64**
 
 > [!IMPORTANT]
@@ -77,6 +77,10 @@ Under **Advanced options**, choose one of these modes:
 | Browser profile | You already have an active session in a supported browser | TubePort asks yt-dlp to read that profile's cookies locally. Select the correct profile. |
 | `cookies.txt` file | Browser-cookie access is locked or cannot be decrypted | Use a fresh Netscape-format export. Treat the file like an active session credential. |
 
+When cookies are required, TubePort offers **Use cookies.txt…** directly on the
+error result. In file mode, **Export help** opens yt-dlp's upstream guidance in
+your default browser.
+
 Supported browser-profile sources are Google Chrome, Microsoft Edge, Brave,
 Vivaldi, Opera, Chromium, Mozilla Firefox, and Naver Whale.
 
@@ -84,8 +88,10 @@ Vivaldi, Opera, Chromium, Mozilla Firefox, and Naver Whale.
 
 Two failures look similar but require different responses:
 
-- **Cookie database is locked:** completely close the selected browser,
-  including its background processes, and try again.
+- **Cookie database could not be copied:** the selected browser or a background
+  process may be using it. Close that browser completely and try again. TubePort
+  verifies this from yt-dlp's actual result; process presence alone is only an
+  advisory signal.
 - **DPAPI, v20, or App-Bound decryption failed:** closing the browser will not
   fix it. Use a fresh Netscape `cookies.txt` file or a Firefox profile.
 

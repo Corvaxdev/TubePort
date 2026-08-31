@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import webbrowser
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,7 +32,7 @@ except ImportError:  # Source mode remains usable without the optional theme pac
     sv_ttk = None
 
 APP_NAME = "TubePort"
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.1.2"
 APP_TAGLINE = "Download video or audio from YouTube and Instagram in your preferred format"
 VIDEO_FORMATS = ("MP4", "MKV", "WebM")
 AUDIO_FORMATS = ("MP3", "M4A", "Opus")
@@ -68,6 +69,7 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 TK_SHIFT_MASK = 0x0001
 TK_CONTROL_MASK = 0x0004
 WINDOWS_VIRTUAL_KEY_V = 86
+COOKIE_EXPORT_HELP_URL = "https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
 
 
 def is_url_paste_shortcut(
@@ -690,6 +692,25 @@ def browser_process_running(browser: str) -> bool:
     return False
 
 
+def browser_cookie_process_advisory(
+    browser: str | None,
+    *,
+    detected: bool | None = None,
+) -> tuple[bool, str | None]:
+    """Report process presence without treating it as proof of a cookie DB lock."""
+    if not browser or browser not in CHROMIUM_COOKIE_BROWSERS:
+        return False, None
+    process_detected = browser_process_running(browser) if detected is None else bool(detected)
+    if not process_detected:
+        return False, None
+    browser_label = next((label for label, key in COOKIE_BROWSERS.items() if key == browser), browser)
+    return (
+        True,
+        f"A {browser_label} process was detected. TubePort will still try the selected profile because "
+        "process presence alone does not prove that its cookie database is locked.",
+    )
+
+
 def build_browser_launch_command(browser: str, profile: str | None, url: str) -> list[str] | None:
     executable = find_browser_executable(browser)
     if not executable:
@@ -1270,8 +1291,16 @@ class DownloaderApp:
         self.result_frame.columnconfigure(0, weight=1)
         self.result_label = ttk.Label(self.result_frame, textvariable=self.result_var, style="Result.TLabel", wraplength=610)
         self.result_label.grid(row=0, column=0, sticky="ew")
+        self.auth_recovery_button = ttk.Button(
+            self.result_frame,
+            text="Use cookies.txt…",
+            command=self.use_cookies_file,
+            style="Secondary.TButton",
+        )
+        self.auth_recovery_button.grid(row=0, column=1, padx=(8, 0))
         self.open_file_button = ttk.Button(self.result_frame, text="Open file", command=self.open_result_file, style="Secondary.TButton")
-        self.open_file_button.grid(row=0, column=1, padx=(8, 0))
+        self.open_file_button.grid(row=0, column=2, padx=(8, 0))
+        self.auth_recovery_button.grid_remove()
         self.result_frame.grid_remove()
 
         status_row = ttk.Frame(card, style="Card.TFrame")
@@ -1533,9 +1562,20 @@ class DownloaderApp:
         self.cancel_button.configure(state="normal" if busy else "disabled")
         self._set_option_state(busy)
 
-    def _show_result(self, message: str, *, error: bool = False, allow_open: bool = False) -> None:
+    def _show_result(
+        self,
+        message: str,
+        *,
+        error: bool = False,
+        allow_open: bool = False,
+        auth_recovery: bool = False,
+    ) -> None:
         self.result_var.set(message)
         self.result_label.configure(style="Error.TLabel" if error else "Result.TLabel")
+        if auth_recovery:
+            self.auth_recovery_button.grid()
+        else:
+            self.auth_recovery_button.grid_remove()
         if allow_open:
             self.open_file_button.grid()
         else:
@@ -1577,16 +1617,36 @@ class DownloaderApp:
         if selected:
             self.folder_var.set(selected)
 
-    def choose_cookies_file(self) -> None:
+    def choose_cookies_file(self) -> bool:
         selected = filedialog.askopenfilename(
             title="Select a Netscape cookies.txt file",
             filetypes=(("Netscape cookies", "*.txt"), ("All files", "*.*")),
         )
-        if selected:
-            self.cookies_file_var.set(selected)
-            service, _media_id = media_identity(self.url_var.get())
-            validation = validate_cookies_file(selected, service)
-            self.cookie_hint_var.set(str(validation.get("warning") or validation.get("message")))
+        if not selected:
+            return False
+        self.cookies_file_var.set(selected)
+        service, _media_id = media_identity(self.url_var.get())
+        validation = validate_cookies_file(selected, service)
+        self.cookie_hint_var.set(str(validation.get("warning") or validation.get("message")))
+        return True
+
+    def use_cookies_file(self) -> None:
+        if not self.choose_cookies_file():
+            return
+        self.cookies_browser_var.set(COOKIE_FILE_LABEL)
+        self._refresh_auth_controls()
+        if not self.advanced_visible:
+            self.toggle_advanced()
+
+    def open_cookie_export_help(self) -> None:
+        try:
+            opened = webbrowser.open(COOKIE_EXPORT_HELP_URL, new=2)
+        except (OSError, webbrowser.Error):
+            opened = False
+        if not opened:
+            messagebox.showerror(APP_NAME, "Could not open the cookie export guide in your browser.")
+            return
+        self.diagnostics.append("Opened the yt-dlp cookie export guide.")
 
     def _selected_cookie_browser(self) -> str | None:
         return COOKIE_BROWSERS.get(self.cookies_browser_var.get())
@@ -1611,7 +1671,11 @@ class DownloaderApp:
             self.cookies_file_entry.grid_remove()
             self.cookies_file_button.grid_remove()
             executable = find_browser_executable(browser)
-            self.open_login_button.configure(state="disabled" if self.busy or not executable else "normal")
+            self.open_login_button.configure(
+                text="Open sign-in page",
+                command=self.open_auth_page,
+                state="disabled" if self.busy or not executable else "normal",
+            )
             if not executable and not (browser_user_data_root(browser) and browser_user_data_root(browser).exists()):
                 self.cookie_hint_var.set("This browser was not found on this computer. Choose cookies.txt or another browser.")
             elif browser in CHROMIUM_COOKIE_BROWSERS:
@@ -1627,15 +1691,22 @@ class DownloaderApp:
             self.cookies_file_label.grid()
             self.cookies_file_entry.grid()
             self.cookies_file_button.grid()
-            self.open_login_button.configure(state="disabled")
-            self.cookie_hint_var.set("The file is used only for this run and is not copied by TubePort. Protect it like a password.")
+            self.open_login_button.configure(
+                text="Export help",
+                command=self.open_cookie_export_help,
+                state="disabled" if self.busy else "normal",
+            )
+            self.cookie_hint_var.set(
+                "Use a fresh Netscape cookies.txt export. The file is used only for this run and is not copied by TubePort. "
+                "Protect it like a password."
+            )
         else:
             self.cookies_profile_label.grid_remove()
             self.cookies_profile_combo.grid_remove()
             self.cookies_file_label.grid_remove()
             self.cookies_file_entry.grid_remove()
             self.cookies_file_button.grid_remove()
-            self.open_login_button.configure(state="disabled")
+            self.open_login_button.configure(text="Open sign-in page", command=self.open_auth_page, state="disabled")
             self.cookie_hint_var.set("Public media usually does not require authentication.")
 
     def open_auth_page(self) -> None:
@@ -1699,6 +1770,7 @@ class DownloaderApp:
         **details: object,
     ) -> None:
         self.detected_error_kind = error_kind
+        self.last_error_line = None
         self.status_var.set("Authentication check found a problem")
         self.append_log(f"Preflight check: {error_kind}: {message}")
         self.record_state(
@@ -1710,6 +1782,7 @@ class DownloaderApp:
             instagram_shortcode=media_id if service == "instagram" else None,
             exit_code=None,
             error_kind=error_kind,
+            last_error_line=None,
             message=message,
             **details,
         )
@@ -1719,6 +1792,8 @@ class DownloaderApp:
     def start_download(self) -> None:
         if self.busy:
             return
+
+        self._reset_attempt_diagnostics()
 
         url = self.url_var.get().strip()
         if not is_supported_url(url):
@@ -1744,6 +1819,7 @@ class DownloaderApp:
         selected_browser = self._selected_cookie_browser()
         selected_profile = self._selected_browser_profile() if selected_browser else None
         selected_cookies_file: Path | None = None
+        browser_process_detected = False
         if auth_source == COOKIE_FILE_LABEL:
             validation = validate_cookies_file(self.cookies_file_var.get(), service)
             if not validation.get("ok"):
@@ -1771,18 +1847,9 @@ class DownloaderApp:
                     browser_profile=selected_profile or "auto",
                 )
                 return
-            if selected_browser in CHROMIUM_COOKIE_BROWSERS and browser_process_running(selected_browser):
-                browser_label = next((label for label, key in COOKIE_BROWSERS.items() if key == selected_browser), selected_browser)
-                self._fail_preflight(
-                    "browser_database_locked",
-                    f"{browser_label} is running and locking its cookie database. Close all its windows and background processes, "
-                    "or choose cookies.txt. TubePort never closes the browser automatically.",
-                    service,
-                    media_id,
-                    cookies_browser=selected_browser,
-                    browser_profile=selected_profile or "auto",
-                )
-                return
+            browser_process_detected, advisory = browser_cookie_process_advisory(selected_browser)
+            if advisory:
+                self.append_log(f"Authentication note: {advisory}")
 
         folder_text = self.folder_var.get().strip()
         if not folder_text:
@@ -1822,9 +1889,6 @@ class DownloaderApp:
         self.last_result = None
         self.busy = True
         self.cancel_requested = False
-        self.detected_error_kind = None
-        self.last_error_line = None
-        self.recent_log.clear()
         self.progress_var.set(0)
         self.display_progress = 0.0
         self.percent_label.configure(text="0%")
@@ -1847,6 +1911,7 @@ class DownloaderApp:
             auth_source="cookies_file" if self.active_cookies_file else ("browser" if self.active_cookie_browser else "none"),
             cookies_browser=self.active_cookie_browser or "none",
             browser_profile=self.active_browser_profile or "auto",
+            browser_process_detected=browser_process_detected,
             cookies_file=self.active_cookies_file.name if self.active_cookies_file else None,
             output_folder=str(folder),
             temp_folder=str(temp_folder),
@@ -1862,6 +1927,38 @@ class DownloaderApp:
         self.append_log("Starting yt-dlp…")
 
         threading.Thread(target=self._download_worker, args=(command, media_type), daemon=True).start()
+
+    def _reset_attempt_diagnostics(self) -> None:
+        self.detected_error_kind = None
+        self.last_error_line = None
+        self.recent_log.clear()
+        self.record_state(
+            force=True,
+            phase="validating",
+            service=None,
+            media_id=None,
+            video_id=None,
+            instagram_shortcode=None,
+            auth_source="none",
+            cookies_browser="none",
+            browser_profile="auto",
+            browser_process_detected=False,
+            cookies_file=None,
+            media_type=None,
+            quality=None,
+            container=None,
+            output_folder=None,
+            temp_folder=None,
+            progress=0.0,
+            title=None,
+            speed=None,
+            eta=None,
+            result_path=None,
+            exit_code=None,
+            error_kind=None,
+            last_error_line=None,
+            message="Validating download request",
+        )
 
     def _download_worker(self, command: list[str], media_type: str) -> None:
         try:
@@ -1994,7 +2091,7 @@ class DownloaderApp:
         else:
             error_kind = self.detected_error_kind or "download_error"
             status_by_kind = {
-                "browser_database_locked": "Browser is locking the cookie database",
+                "browser_database_locked": "Could not access browser cookie database",
                 "chromium_app_bound_encryption": "Cookies are protected by Windows",
                 "browser_profile_missing": "Browser profile not found",
                 "cookies_file_invalid": "cookies.txt was rejected",
@@ -2017,7 +2114,15 @@ class DownloaderApp:
                 has_browser=bool(self.active_cookie_browser),
                 has_cookies_file=bool(self.active_cookies_file),
             )
-            self._show_result(visible_error, error=True)
+            self._show_result(
+                visible_error,
+                error=True,
+                auth_recovery=error_kind in {
+                    "browser_database_locked",
+                    "chromium_app_bound_encryption",
+                    "authentication_required",
+                },
+            )
         if self.close_after_cancel:
             self.root.after(50, self._close_when_process_stops)
 
@@ -2412,10 +2517,114 @@ def ui_contract(report_file: str | None = None) -> int:
         "cancel": bool(str(app.cancel_button.cget("command"))),
         "open_folder": bool(str(app.open_button.cget("command"))),
         "open_file": bool(str(app.open_file_button.cget("command"))),
+        "auth_recovery": bool(str(app.auth_recovery_button.cget("command"))),
         "diagnostics": bool(str(app.details_button.cget("command"))),
         "open_login": bool(str(app.open_login_button.cget("command"))),
         "choose_cookies_file": bool(str(app.cookies_file_button.cget("command"))),
     }
+    process_detected, process_advisory = browser_cookie_process_advisory("chrome", detected=True)
+    process_policy = {
+        "presence_is_advisory": bool(
+            process_detected
+            and process_advisory
+            and "does not prove" in process_advisory
+        ),
+        "dpapi_has_priority": (
+            error_kind_priority("chromium_app_bound_encryption")
+            > error_kind_priority("browser_database_locked")
+        ),
+    }
+    app.detected_error_kind = "browser_database_locked"
+    app.last_error_line = "stale error from a previous attempt"
+    app.recent_log.append("stale log line")
+    app.debug_state.update(
+        {
+            "phase": "failed",
+            "auth_source": "browser",
+            "browser_process_detected": True,
+            "exit_code": 1,
+            "error_kind": "authentication_required",
+            "last_error_line": "stale persisted error",
+            "result_path": "stale-result.mp4",
+        }
+    )
+    app.record_state(force=True)
+    app._reset_attempt_diagnostics()
+    persisted_reset = app.diagnostics.read_state()
+    state_hygiene = {
+        "error_kind_cleared": app.detected_error_kind is None,
+        "error_line_cleared": app.last_error_line is None,
+        "recent_log_cleared": not app.recent_log,
+        "persisted_phase_reset": persisted_reset.get("phase") == "validating",
+        "persisted_error_cleared": persisted_reset.get("error_kind") is None,
+        "persisted_error_line_cleared": persisted_reset.get("last_error_line") is None,
+        "persisted_exit_code_cleared": persisted_reset.get("exit_code") is None,
+        "persisted_result_cleared": persisted_reset.get("result_path") is None,
+        "persisted_auth_reset": persisted_reset.get("auth_source") == "none",
+        "persisted_process_reset": persisted_reset.get("browser_process_detected") is False,
+    }
+
+    original_file_dialog = filedialog.askopenfilename
+    try:
+        app.cookies_browser_var.set("Google Chrome")
+        app.cookies_file_var.set("previous-cookies.txt")
+        filedialog.askopenfilename = lambda **_kwargs: ""
+        app.use_cookies_file()
+        recovery_cancel = {
+            "source_preserved": app.cookies_browser_var.get() == "Google Chrome",
+            "path_preserved": app.cookies_file_var.get() == "previous-cookies.txt",
+        }
+        filedialog.askopenfilename = lambda **_kwargs: r"C:\selected-cookies.txt"
+        app.use_cookies_file()
+        recovery_success = {
+            "source_changed_after_selection": app.cookies_browser_var.get() == COOKIE_FILE_LABEL,
+            "path_changed_after_selection": app.cookies_file_var.get() == r"C:\selected-cookies.txt",
+            "export_help_available": str(app.open_login_button.cget("text")) == "Export help",
+        }
+    finally:
+        filedialog.askopenfilename = original_file_dialog
+        app.cookies_browser_var.set(COOKIE_NONE_LABEL)
+        app.cookies_file_var.set("")
+        app._refresh_auth_controls()
+
+    original_thread = threading.Thread
+    original_find_browser = globals()["find_browser_executable"]
+    original_process_check = globals()["browser_process_running"]
+    worker_starts: list[object] = []
+
+    class DeferredThread:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.target = kwargs.get("target") or (args[0] if args else None)
+
+        def start(self) -> None:
+            worker_starts.append(self.target)
+
+    try:
+        threading.Thread = DeferredThread  # type: ignore[assignment]
+        globals()["find_browser_executable"] = lambda _browser: r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        globals()["browser_process_running"] = lambda _browser: True
+        app.yt_dlp = "tools/yt-dlp.exe"
+        app.ffmpeg = "tools/ffmpeg.exe"
+        app.url_var.set("https://www.youtube.com/watch?v=8KB0HvvXIN0")
+        app.folder_var.set(str(Path.cwd()))
+        app.cookies_browser_var.set("Google Chrome")
+        app._refresh_auth_controls()
+        app.start_download()
+        false_lock_regression = {
+            "worker_started": len(worker_starts) == 1,
+            "download_entered_busy_state": app.busy,
+            "no_preflight_error": app.detected_error_kind is None,
+            "phase_is_starting": app.debug_state.get("phase") == "starting",
+            "process_recorded_as_advisory": app.debug_state.get("browser_process_detected") is True,
+        }
+    finally:
+        threading.Thread = original_thread
+        globals()["find_browser_executable"] = original_find_browser
+        globals()["browser_process_running"] = original_process_check
+        app.busy = False
+        app._set_busy_state(False)
+        app.cookies_browser_var.set(COOKIE_NONE_LABEL)
+        app._refresh_auth_controls()
     url_actions = {
         "control_keypress": bool(app.url_entry.bind("<Control-KeyPress>")),
         "shift_insert": bool(app.url_entry.bind("<Shift-Insert>")),
@@ -2474,6 +2683,11 @@ def ui_contract(report_file: str | None = None) -> int:
         "english_interface": english_interface,
         "cyrillic_strings": cyrillic_strings,
         "callbacks": callbacks,
+        "browser_process_policy": process_policy,
+        "attempt_state_hygiene": state_hygiene,
+        "cookies_file_recovery_cancel": recovery_cancel,
+        "cookies_file_recovery_success": recovery_success,
+        "false_lock_regression": false_lock_regression,
         "diagnostics_phase": app.diagnostics.read_state().get("phase"),
         "ok": (
             initial["title"] == APP_NAME
@@ -2491,6 +2705,11 @@ def ui_contract(report_file: str | None = None) -> int:
             and all(url_actions.values())
             and all(english_interface.values())
             and all(callbacks.values())
+            and all(process_policy.values())
+            and all(state_hygiene.values())
+            and all(recovery_cancel.values())
+            and all(recovery_success.values())
+            and all(false_lock_regression.values())
         ),
     }
     root.destroy()
@@ -2515,7 +2734,10 @@ def error_kind_priority(error_kind: str | None) -> int:
 
 def diagnostic_error_message(error_kind: str, *, has_browser: bool = False, has_cookies_file: bool = False) -> str:
     if error_kind == "browser_database_locked":
-        return "The browser is running and locking its cookie database. Close all windows and background processes, or choose cookies.txt."
+        return (
+            "yt-dlp could not copy the browser cookie database. A browser or background process may be using it. "
+            "Close that browser completely and retry; if the problem persists, use a fresh cookies.txt file."
+        )
     if error_kind == "chromium_app_bound_encryption":
         return (
             "Chromium protected its v20 cookies with Windows App-Bound/DPAPI encryption. Closing the browser will not fix this: "
@@ -2615,14 +2837,12 @@ def diagnostic_probe(
     yt_dlp = find_executable("yt-dlp")
     ffmpeg = find_executable("ffmpeg")
     js_runtime = find_js_runtime()
+    browser_process_detected, process_advisory = browser_cookie_process_advisory(cookies_browser)
     if cookies_file:
         validation = validate_cookies_file(cookies_file, service)
     else:
         validation = None
-    if cookies_browser and cookies_browser in CHROMIUM_COOKIE_BROWSERS and browser_process_running(cookies_browser):
-        output = "Browser cookie database is locked because the selected browser is running"
-        return_code = 1
-    elif validation and not validation.get("ok"):
+    if validation and not validation.get("ok"):
         output = f"cookies.txt invalid: {validation.get('message')}"
         return_code = 1
     elif not yt_dlp:
@@ -2664,7 +2884,9 @@ def diagnostic_probe(
             return_code = -2
 
     lines = [redact_diagnostic_line(line) for line in output.splitlines() if line.strip()][-120:]
-    for line in lines:
+    recent_lines = ([process_advisory] if process_advisory else []) + lines
+    recent_lines = recent_lines[-120:]
+    for line in recent_lines:
         store.append(f"[probe] {line}")
     error_kind = classify_diagnostic_error(output)
     phase = "probe_completed" if return_code == 0 else "probe_failed"
@@ -2680,6 +2902,7 @@ def diagnostic_probe(
         "auth_source": "cookies_file" if cookies_file else ("browser" if cookies_browser else "none"),
         "cookies_browser": cookies_browser or "none",
         "browser_profile": browser_profile or "auto",
+        "browser_process_detected": browser_process_detected,
         "cookies_file": Path(cookies_file).name if cookies_file else None,
         "exit_code": return_code,
         "error_kind": error_kind,
@@ -2687,7 +2910,7 @@ def diagnostic_probe(
         "tools": {"yt_dlp": yt_dlp, "ffmpeg": ffmpeg, "js_runtime": js_runtime},
         "state_path": str(store.state_path),
         "log_path": str(store.log_path),
-        "recent_log": lines,
+        "recent_log": recent_lines,
     }
     store.write_state(state)
     emit_json(state, report_file)

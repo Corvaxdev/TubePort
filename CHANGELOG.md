@@ -11,6 +11,37 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 - Nothing yet.
 
+## [2.1.2] - 2026-08-31
+
+### Added
+
+- A direct `Use cookies.txt…` recovery action for authentication failures and
+  an in-app link to the upstream cookie-export guide.
+
+### Changed
+
+- Browser process detection is now advisory. TubePort always lets yt-dlp try
+  the selected profile and classifies the actual result.
+- Cookie database access errors no longer claim that a running browser is the
+  definite cause.
+
+### Fixed
+
+- Removed a false preflight failure where an unrelated or background
+  `chrome.exe` was treated as proof that the selected cookie database was
+  locked.
+- Cleared stale in-memory and persisted attempt details before validation so a
+  previous error cannot contaminate a new diagnostic report.
+- Kept the previous authentication selection intact when the cookies.txt
+  recovery file chooser is canceled.
+
+### Verification
+
+- Reproduced the original failure through the structured debug probe.
+- Verified that Chrome `Default`, Chrome `Profile 2`, and Edge `Default` now
+  reach yt-dlp and correctly report Windows App-Bound/DPAPI protection instead
+  of a synthetic browser-lock error.
+
 ## [2.1.1] - 2026-08-31
 
 ### Added
@@ -53,5 +84,6 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 Earlier builds were internal proof-of-concept iterations and are not documented
 as public releases here.
 
-[Unreleased]: ../../compare/v2.1.1...HEAD
+[Unreleased]: ../../compare/v2.1.2...HEAD
+[2.1.2]: ../../compare/v2.1.1...v2.1.2
 [2.1.1]: ../../releases/tag/v2.1.1

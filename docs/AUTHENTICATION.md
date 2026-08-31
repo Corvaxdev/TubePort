@@ -23,8 +23,9 @@ and Naver Whale.
 
 Chromium browsers on current Windows versions can expose two distinct errors:
 
-- The browser process is still locking its cookie database. Close all browser
-  windows and background processes, then retry.
+- yt-dlp could not copy the browser cookie database. A browser or background
+  process may be using it. Close that browser completely and retry. TubePort
+  does not infer a lock merely because a process with the browser's name exists.
 - App-Bound Encryption protects `v20` cookie values. Closing the browser does
   not solve this. Use a fresh Netscape-format `cookies.txt` export or a Firefox
   profile instead.

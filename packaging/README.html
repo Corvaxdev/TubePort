@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TubePort 2.1.1 — Quick Start</title>
+  <title>TubePort 2.1.2 — Quick Start</title>
   <style>
     :root { color-scheme: light; --ink:#15213a; --muted:#66728a; --paper:#fff; --wash:#f3f5fa; --accent:#ef5a78; --mint:#45bfae; --line:#e3e7ef; }
     * { box-sizing:border-box; }
@@ -32,7 +32,7 @@
   <header>
     <h1>TubePort</h1>
     <p>A portable app for saving video and audio.</p>
-    <span class="badge">Version 2.1.1 · Windows 10/11 x64</span>
+    <span class="badge">Version 2.1.2 · Windows 10/11 x64</span>
   </header>
 
   <section>
@@ -73,7 +73,7 @@
     <h2>Chrome and other Chromium browser limitations on Windows</h2>
     <p>Chrome and some current Chromium-based browsers protect cookies with App-Bound Encryption. These values use the <code>v20</code> format and may be inaccessible to yt-dlp when it reads a regular browser profile from another application.</p>
     <ul>
-      <li>A “failed to copy the cookie database” message usually means that the browser has the file open. Close all of its windows and background processes completely, then try again.</li>
+      <li>A “failed to copy the cookie database” message means yt-dlp could not copy that file. A browser or background process may be using it. Close that browser completely and try again; TubePort does not infer a lock from process presence alone.</li>
       <li>A decryption error mentioning <code>DPAPI</code>, <code>v20</code>, or <code>App-Bound</code> is a different issue. Closing the browser will not resolve it: use a fresh <code>cookies.txt</code> file or another supported browser.</li>
       <li>Do not run TubePort as an administrator or disable browser security to extract cookies.</li>
     </ul>
@@ -99,7 +99,7 @@
     </ul>
   </section>
 
-  <footer>TubePort 2.1.1 · MIT-licensed bootstrap build · Third-party licenses are in the <code>licenses</code> folder.</footer>
+  <footer>TubePort 2.1.2 · MIT-licensed bootstrap build · Third-party licenses are in the <code>licenses</code> folder.</footer>
 </main>
 </body>
 </html>
