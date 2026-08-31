@@ -13,7 +13,7 @@ audio from supported YouTube video URLs and Instagram Reel URLs. It provides a
 small graphical interface over locally installed command-line media tools and includes
 local diagnostics for common authentication and packaging failures.
 
-Current version: **2.1.2**
+Current version: **2.1.3**
 Supported release platform: **Windows 10/11 x64**
 
 > [!IMPORTANT]
@@ -31,10 +31,11 @@ Supported release platform: **Windows 10/11 x64**
 - Maximum-quality selection from 360p through 2160p, or best available
 - A one-item mode that prevents an attached YouTube playlist from being
   downloaded unintentionally
-- Optional authenticated access through an existing browser profile or a
-  user-selected Netscape `cookies.txt` file
-- Browser-profile discovery for Chrome, Edge, Brave, Vivaldi, Opera, Chromium,
-  Firefox, and Naver Whale
+- Optional authenticated access through a user-selected Netscape `cookies.txt`
+  file, or through a detected Mozilla Firefox installation
+- Honest Windows authentication choices: Chromium profiles are not offered
+  because current App-Bound/DPAPI cookie protection makes direct access
+  unreliable outside the browser
 - Native paste behavior, including Ctrl+V under non-English Windows keyboard
   layouts, Shift+Insert, and the context menu
 - Local diagnostics that distinguish browser database locks, Chromium
@@ -74,26 +75,22 @@ Under **Advanced options**, choose one of these modes:
 | Mode | When to use it | Important notes |
 | --- | --- | --- |
 | Do not use | Public media that the source site serves anonymously | The site may still require sign-in. |
-| Browser profile | You already have an active session in a supported browser | TubePort asks yt-dlp to read that profile's cookies locally. Select the correct profile. |
-| `cookies.txt` file | Browser-cookie access is locked or cannot be decrypted | Use a fresh Netscape-format export. Treat the file like an active session credential. |
+| `cookies.txt` file | Recommended Windows mode when sign-in is required | Use a fresh Netscape-format export from your own signed-in session. Treat the file like an active session credential. |
+| Mozilla Firefox profile | Firefox is installed and the required session is active in it | This choice appears only when TubePort detects `firefox.exe`. Select the correct Firefox profile. |
 
 When cookies are required, TubePort offers **Use cookies.txt…** directly on the
 error result. In file mode, **Export help** opens yt-dlp's upstream guidance in
 your default browser.
 
-Supported browser-profile sources are Google Chrome, Microsoft Edge, Brave,
-Vivaldi, Opera, Chromium, Mozilla Firefox, and Naver Whale.
+### Why Chromium profiles are not shown on Windows
 
-### Windows and Chromium cookie protection
-
-Two failures look similar but require different responses:
-
-- **Cookie database could not be copied:** the selected browser or a background
-  process may be using it. Close that browser completely and try again. TubePort
-  verifies this from yt-dlp's actual result; process presence alone is only an
-  advisory signal.
-- **DPAPI, v20, or App-Bound decryption failed:** closing the browser will not
-  fix it. Use a fresh Netscape `cookies.txt` file or a Firefox profile.
+TubePort deliberately does not offer direct Google Chrome, Microsoft Edge,
+Brave, Vivaldi, Opera, Chromium, or Naver Whale profile access in its Windows
+interface. Current Chromium browsers can protect `v20` cookies with Windows
+App-Bound/DPAPI encryption, which makes direct reading by yt-dlp unreliable.
+Closing the browser does not fix this encryption failure. Use a fresh Netscape
+`cookies.txt` export instead, or an installed Firefox profile when it is
+offered.
 
 Do not run TubePort as administrator, weaken browser security, or copy raw
 browser databases. Never share or commit a `cookies.txt` file. Delete exported
@@ -142,8 +139,9 @@ python .\src\TubePort.pyw --self-test
 ```
 
 The broader `--self-test` reports the locally discovered yt-dlp, FFmpeg,
-JavaScript runtime, browser profiles, and command contract. It is expected to
-report missing optional tools on an incomplete development machine.
+JavaScript runtime, authentication-source inventory, and command contract. It
+is expected to report missing optional tools on an incomplete development
+machine.
 
 ## Privacy and security
 

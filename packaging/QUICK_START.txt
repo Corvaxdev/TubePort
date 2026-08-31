@@ -1,4 +1,4 @@
-TubePort 2.1.2 — Quick Start
+TubePort 2.1.3 — Quick Start
 ================================
 
 1. Extract the entire ZIP archive.
@@ -11,22 +11,21 @@ You do not need to install Python, yt-dlp, Deno, or FFmpeg manually. The setup
 script downloads pinned upstream releases and verifies every SHA-256 digest
 before placing the tools beside TubePort. Windows 10/11 x64 is supported.
 
-For videos that require sign-in, open “Advanced options” and select the browser
-and profile with an active session. Chrome, Edge, Brave, Vivaldi, Opera,
-Chromium, Firefox, and Whale are supported. For age-restricted YouTube videos,
-age must be verified in the selected profile.
+For videos that require sign-in, open “Advanced options” and select your own
+fresh cookies.txt file in Mozilla/Netscape format. This is the recommended
+authenticated mode on Windows. The file is equivalent to an active account
+session: do not share it, and delete it when it is no longer needed. Cookies are
+not included in the package.
 
-If profile access does not work, select your own cookies.txt file in
-Mozilla/Netscape format. This file is equivalent to an active account session:
-do not share it with anyone, and delete it when it is no longer needed. Cookies
-are not included in the package.
+If Mozilla Firefox is installed, TubePort also offers its local profiles. The
+Firefox choice appears only when firefox.exe is detected.
 
-Windows and Chromium:
-- “Failed to copy the cookie database” — a browser or background process may be
-  using the file. Close that browser completely and try again. TubePort only
-  reports this after yt-dlp actually fails to copy the database.
-- A decryption error mentioning DPAPI, v20, or App-Bound — closing the browser
-  will not help. Use a fresh cookies.txt file or another supported browser.
+Why Chromium profiles are not shown on Windows:
+- Chrome, Edge, Brave, Vivaldi, Opera, Chromium, and Whale may protect v20
+  cookies with App-Bound/DPAPI encryption. Direct access from yt-dlp is not
+  reliable, so TubePort deliberately does not offer those profiles.
+- Closing the Chromium browser does not fix this encryption failure. Use a
+  fresh cookies.txt export instead.
 - Do not run TubePort as an administrator or disable browser security.
 
 TubePort never asks for or accepts a username or password. Enter your credentials

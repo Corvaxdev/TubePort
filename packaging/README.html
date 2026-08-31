@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TubePort 2.1.2 — Quick Start</title>
+  <title>TubePort 2.1.3 — Quick Start</title>
   <style>
     :root { color-scheme: light; --ink:#15213a; --muted:#66728a; --paper:#fff; --wash:#f3f5fa; --accent:#ef5a78; --mint:#45bfae; --line:#e3e7ef; }
     * { box-sizing:border-box; }
@@ -32,7 +32,7 @@
   <header>
     <h1>TubePort</h1>
     <p>A portable app for saving video and audio.</p>
-    <span class="badge">Version 2.1.2 · Windows 10/11 x64</span>
+    <span class="badge">Version 2.1.3 · Windows 10/11 x64</span>
   </header>
 
   <section>
@@ -56,25 +56,25 @@
 
   <section class="note">
     <h2>Videos that require sign-in</h2>
-    <p>TubePort never asks for a username or password. Sign in to YouTube or Instagram on the official website in your regular browser, then select that browser and the appropriate profile under “Advanced options.” Google Chrome, Microsoft Edge, Brave, Vivaldi, Opera, Chromium, Mozilla Firefox, and Whale are supported.</p>
-    <p>If the browser has multiple profiles, select the one signed in to the required account. For age-restricted YouTube videos, age must also be verified in that specific profile. A session from another profile will not grant access, even if you selected the correct browser.</p>
+    <p>TubePort never asks for a username or password. Sign in only on the official YouTube or Instagram website in your regular browser. Under “Advanced options,” select your own fresh Netscape-format <code>cookies.txt</code> file. This is the recommended authenticated mode on Windows.</p>
+    <p>If Mozilla Firefox is installed, TubePort also offers its local profiles. The Firefox choice appears only when <code>firefox.exe</code> is detected.</p>
   </section>
 
   <section>
-    <h2>Two ways to provide authentication</h2>
+    <h2>Authentication choices on Windows</h2>
     <div class="grid">
-      <div class="mini"><strong>Browser profile</strong>TubePort asks yt-dlp to read cookies from the selected profile on this computer. Your username and password are never passed to the application.</div>
-      <div class="mini"><strong>cookies.txt file</strong>If profile access does not work, select your own cookie file in Mozilla/Netscape format. A JSON export is not compatible.</div>
+      <div class="mini"><strong>cookies.txt file — recommended</strong>Select your own fresh cookie file in Mozilla/Netscape format. A JSON export is not compatible.</div>
+      <div class="mini"><strong>Detected Mozilla Firefox</strong>When Firefox is installed, TubePort can ask yt-dlp to read cookies from the selected local Firefox profile.</div>
     </div>
     <p>A <code>cookies.txt</code> file effectively grants access to an active account session. Do not share it with anyone, upload it to public cloud storage, or keep it after it is no longer needed. Cookies are not included in the portable TubePort package.</p>
   </section>
 
   <section class="warn">
-    <h2>Chrome and other Chromium browser limitations on Windows</h2>
-    <p>Chrome and some current Chromium-based browsers protect cookies with App-Bound Encryption. These values use the <code>v20</code> format and may be inaccessible to yt-dlp when it reads a regular browser profile from another application.</p>
+    <h2>Why Chromium profiles are not shown</h2>
+    <p>TubePort deliberately does not offer Google Chrome, Microsoft Edge, Brave, Vivaldi, Opera, Chromium, or Whale profiles in its Windows interface. Current Chromium browsers can protect <code>v20</code> cookies with App-Bound/DPAPI encryption, making direct access from yt-dlp unreliable.</p>
     <ul>
-      <li>A “failed to copy the cookie database” message means yt-dlp could not copy that file. A browser or background process may be using it. Close that browser completely and try again; TubePort does not infer a lock from process presence alone.</li>
-      <li>A decryption error mentioning <code>DPAPI</code>, <code>v20</code>, or <code>App-Bound</code> is a different issue. Closing the browser will not resolve it: use a fresh <code>cookies.txt</code> file or another supported browser.</li>
+      <li>Closing a Chromium browser does not fix App-Bound/DPAPI decryption failures.</li>
+      <li>Use a fresh <code>cookies.txt</code> file, or an installed Firefox profile when it is offered.</li>
       <li>Do not run TubePort as an administrator or disable browser security to extract cookies.</li>
     </ul>
   </section>
@@ -99,7 +99,7 @@
     </ul>
   </section>
 
-  <footer>TubePort 2.1.2 · MIT-licensed bootstrap build · Third-party licenses are in the <code>licenses</code> folder.</footer>
+  <footer>TubePort 2.1.3 · MIT-licensed bootstrap build · Third-party licenses are in the <code>licenses</code> folder.</footer>
 </main>
 </body>
 </html>

@@ -11,6 +11,28 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 - Nothing yet.
 
+## [2.1.3] - 2026-08-31
+
+### Changed
+
+- Removed Google Chrome, Microsoft Edge, Brave, Vivaldi, Opera, Chromium, and
+  Naver Whale profile choices from the Windows interface. End-to-end checks
+  showed that current App-Bound/DPAPI-protected Chromium cookies could not be
+  used reliably outside the browser.
+- Made a user-selected Netscape `cookies.txt` file the primary authenticated
+  path on Windows.
+- Show Mozilla Firefox profile authentication only when `firefox.exe` is
+  detected.
+
+### Verification
+
+- Added a deterministic Windows GUI contract that fails if a Chromium profile
+  label is exposed, if `cookies.txt` is missing, or if Firefox visibility does
+  not match installation detection.
+- Reconfirmed that Chrome `Default`, Chrome `Profile 2`, and Edge `Default`
+  reach yt-dlp but fail to decrypt the current Windows DPAPI-protected cookies;
+  closing Chromium does not resolve that failure.
+
 ## [2.1.2] - 2026-08-31
 
 ### Added
@@ -84,6 +106,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 Earlier builds were internal proof-of-concept iterations and are not documented
 as public releases here.
 
-[Unreleased]: ../../compare/v2.1.2...HEAD
+[Unreleased]: ../../compare/v2.1.3...HEAD
+[2.1.3]: ../../compare/v2.1.2...v2.1.3
 [2.1.2]: ../../compare/v2.1.1...v2.1.2
 [2.1.1]: ../../releases/tag/v2.1.1

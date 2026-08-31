@@ -12,6 +12,7 @@ Update the version consistently in:
 - `packaging/tubeport.manifest`
 - `packaging/README.html` and `packaging/QUICK_START.txt`
 - `third_party/COMPONENTS.json`
+- `README.md`
 - `CHANGELOG.md`
 
 Update pinned tool versions, URLs, executable hashes, and archive hashes in
@@ -63,5 +64,5 @@ commit, and create a GitHub Release containing only:
 
 Release notes must state that this is an unsigned proof-of-concept build, that
 the setup step needs internet access, and that authenticated Instagram behavior
-depends on the user's own valid session. Mark a release as pre-release while
-important paths remain unverified.
+depends on the user's own valid `cookies.txt` file or a detected Firefox
+session. Mark a release as pre-release while important paths remain unverified.

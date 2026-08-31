@@ -13,7 +13,7 @@ body:
     attributes:
       label: TubePort version
       description: Shown next to the TubePort title and in diagnostics.
-      placeholder: 2.1.1
+      placeholder: Version shown in the app
     validations:
       required: true
   - type: input
@@ -50,7 +50,7 @@ body:
       description: Do not name an account or attach authentication data.
       options:
         - None
-        - Browser profile
+        - Mozilla Firefox profile (when offered)
         - cookies.txt
         - Not applicable
     validations:

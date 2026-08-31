@@ -32,7 +32,7 @@ except ImportError:  # Source mode remains usable without the optional theme pac
     sv_ttk = None
 
 APP_NAME = "TubePort"
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.1.3"
 APP_TAGLINE = "Download video or audio from YouTube and Instagram in your preferred format"
 VIDEO_FORMATS = ("MP4", "MKV", "WebM")
 AUDIO_FORMATS = ("MP3", "M4A", "Opus")
@@ -55,6 +55,7 @@ COOKIE_FILE_LABEL = "cookies.txt file…"
 COOKIE_PROFILE_AUTO = "Automatic"
 SUPPORTED_COOKIE_BROWSERS = frozenset(browser for browser in COOKIE_BROWSERS.values() if browser)
 CHROMIUM_COOKIE_BROWSERS = frozenset({"brave", "chrome", "chromium", "edge", "opera", "vivaldi", "whale"})
+WINDOWS_GUI_COOKIE_BROWSERS = frozenset({"firefox"})
 BROWSER_EXECUTABLE_NAMES = {
     "brave": "brave.exe",
     "chrome": "chrome.exe",
@@ -664,6 +665,32 @@ def discover_browser_inventory() -> list[dict[str, object]]:
     return inventory
 
 
+def gui_cookie_source_labels(
+    browser_inventory: list[dict[str, object]] | None = None,
+    platform_name: str | None = None,
+) -> tuple[str, ...]:
+    """Return authentication choices that are dependable enough for the GUI."""
+    inventory = discover_browser_inventory() if browser_inventory is None else browser_inventory
+    normalized_platform = (platform_name or os.name).casefold()
+    allowed_browsers = (
+        WINDOWS_GUI_COOKIE_BROWSERS
+        if normalized_platform in {"nt", "win32", "windows"}
+        else SUPPORTED_COOKIE_BROWSERS
+    )
+    windows = normalized_platform in {"nt", "win32", "windows"}
+    installed_browsers = {
+        str(item.get("browser", "")).casefold()
+        for item in inventory
+        if item.get("installed") and (not windows or item.get("executable"))
+    }
+    browser_labels = [
+        label
+        for label, browser in COOKIE_BROWSERS.items()
+        if browser and browser in allowed_browsers and browser in installed_browsers
+    ]
+    return (COOKIE_NONE_LABEL, *browser_labels, COOKIE_FILE_LABEL)
+
+
 def browser_process_running(browser: str) -> bool:
     if os.name != "nt":
         return False
@@ -974,6 +1001,7 @@ class DownloaderApp:
         self.ffmpeg = find_executable("ffmpeg")
         self.js_runtime = find_js_runtime()
         self.browser_inventory = discover_browser_inventory()
+        self.gui_cookie_sources = gui_cookie_source_labels(self.browser_inventory)
 
         self.url_var = tk.StringVar()
         self.media_type_var = tk.StringVar(value=MEDIA_VIDEO_LABEL)
@@ -1003,6 +1031,7 @@ class DownloaderApp:
             phase="ready",
             tools={"yt_dlp": self.yt_dlp, "ffmpeg": self.ffmpeg, "js_runtime": self.js_runtime},
             browser_inventory=self.browser_inventory,
+            gui_cookie_sources=list(self.gui_cookie_sources),
             auth_source="none",
             message="Ready to download",
         )
@@ -1088,7 +1117,7 @@ class DownloaderApp:
         self.cookies_combo = ttk.Combobox(
             auth_row,
             textvariable=self.cookies_browser_var,
-            values=tuple(COOKIE_BROWSERS),
+            values=self.gui_cookie_sources,
             state="readonly",
             width=20,
         )
@@ -1232,7 +1261,7 @@ class DownloaderApp:
         self.cookies_combo = ttk.Combobox(
             self.advanced_frame,
             textvariable=self.cookies_browser_var,
-            values=(*COOKIE_BROWSERS, COOKIE_FILE_LABEL),
+            values=self.gui_cookie_sources,
             state="readonly",
             width=24,
         )
@@ -1747,8 +1776,8 @@ class DownloaderApp:
             APP_NAME,
             "TubePort never asks for or stores your username or password. It uses an already signed-in browser profile "
             "or a Netscape cookies.txt file you select.\n\n"
-            "On Windows, Chromium-based browsers may lock their database while running or protect v20 cookies through DPAPI. "
-            "Diagnostics distinguishes these cases.",
+            "On Windows, Chromium profiles are deliberately not offered because current cookie encryption can prevent "
+            "reliable access. Use cookies.txt, or a Firefox profile when TubePort detects one.",
         )
 
     def on_media_type_changed(self, _event: object = None) -> None:
@@ -2272,18 +2301,37 @@ def self_test(report_file: str | None = None) -> int:
         "container": "MP4",
         "js_runtime": js_runtime,
     }
-    profile_command = build_download_command(**common, cookies_browser="chrome", browser_profile="Profile 2")
+    profile_command = build_download_command(**common, cookies_browser="firefox", browser_profile="default-release")
     cookies_file_command = build_download_command(**common, cookies_file=Path("cookies.txt"))
     mutual_exclusion_rejected = False
     try:
-        build_download_command(**common, cookies_browser="edge", cookies_file=Path("cookies.txt"))
+        build_download_command(**common, cookies_browser="firefox", cookies_file=Path("cookies.txt"))
     except ValueError:
         mutual_exclusion_rejected = True
     auth_contract = {
-        "supported_browsers": SUPPORTED_COOKIE_BROWSERS == frozenset({"brave", "chrome", "chromium", "edge", "firefox", "opera", "vivaldi", "whale"}),
-        "profile_argument": "chrome:Profile 2" in profile_command,
+        "backend_browser_argument_support": SUPPORTED_COOKIE_BROWSERS == frozenset({"brave", "chrome", "chromium", "edge", "firefox", "opera", "vivaldi", "whale"}),
+        "profile_argument": "firefox:default-release" in profile_command,
         "cookies_file_argument": "--cookies" in cookies_file_command,
         "mutual_exclusion": mutual_exclusion_rejected,
+        "windows_hides_chromium": gui_cookie_source_labels(
+            [
+                {"browser": "chrome", "installed": True},
+                {"browser": "edge", "installed": True},
+                {"browser": "firefox", "installed": False},
+            ],
+            "nt",
+        ) == (COOKIE_NONE_LABEL, COOKIE_FILE_LABEL),
+        "windows_shows_detected_firefox": gui_cookie_source_labels(
+            [
+                {"browser": "chrome", "installed": True},
+                {"browser": "firefox", "installed": True, "executable": r"C:\Program Files\Mozilla Firefox\firefox.exe"},
+            ],
+            "nt",
+        ) == (COOKIE_NONE_LABEL, "Mozilla Firefox", COOKIE_FILE_LABEL),
+        "windows_hides_stale_firefox_data": gui_cookie_source_labels(
+            [{"browser": "firefox", "installed": True, "executable": None}],
+            "nt",
+        ) == (COOKIE_NONE_LABEL, COOKIE_FILE_LABEL),
         "classify_locked": classify_diagnostic_error("ERROR: Could not copy Chrome cookie database") == "browser_database_locked",
         "classify_app_bound": classify_diagnostic_error("ERROR: Failed to decrypt with DPAPI") == "chromium_app_bound_encryption",
         "classify_profile": classify_diagnostic_error("Could not find Chrome cookies database in profile") == "browser_profile_missing",
@@ -2436,6 +2484,30 @@ def ui_contract(report_file: str | None = None) -> int:
         "download_button": str(app.download_button.cget("text")),
         "cancel_state": str(app.cancel_button.cget("state")),
     }
+    actual_cookie_sources = tuple(initial["cookie_sources"])
+    expected_cookie_sources = gui_cookie_source_labels(app.browser_inventory)
+    chromium_cookie_labels = {
+        label for label, browser in COOKIE_BROWSERS.items() if browser in CHROMIUM_COOKIE_BROWSERS
+    }
+    firefox_detected = any(
+        item.get("browser") == "firefox" and item.get("installed") and item.get("executable")
+        for item in app.browser_inventory
+    )
+    gui_auth_contract = {
+        "matches_policy": actual_cookie_sources == expected_cookie_sources,
+        "none_is_first": bool(actual_cookie_sources) and actual_cookie_sources[0] == COOKIE_NONE_LABEL,
+        "cookies_file_is_last_once": (
+            bool(actual_cookie_sources)
+            and actual_cookie_sources[-1] == COOKIE_FILE_LABEL
+            and actual_cookie_sources.count(COOKIE_FILE_LABEL) == 1
+        ),
+        "chromium_hidden_on_windows": (
+            os.name != "nt" or not chromium_cookie_labels.intersection(actual_cookie_sources)
+        ),
+        "firefox_matches_detection": (
+            ("Mozilla Firefox" in actual_cookie_sources) == firefox_detected
+        ),
+    }
     app.toggle_advanced()
     app.open_diagnostics()
     root.update_idletasks()
@@ -2507,8 +2579,8 @@ def ui_contract(report_file: str | None = None) -> int:
         media_type="video",
         quality="720p",
         container="MP4",
-        cookies_browser="edge",
-        browser_profile="Profile 2",
+        cookies_browser="firefox",
+        browser_profile="default-release",
     )
     callbacks = {
         "paste": bool(str(app.paste_button.cget("command"))),
@@ -2678,7 +2750,8 @@ def ui_contract(report_file: str | None = None) -> int:
         "busy_states": busy_states,
         "restored_states": restored_states,
         "required_flags": {flag: flag in sample_command for flag in required_flags},
-        "profile_argument": "edge:Profile 2" in profile_command,
+        "profile_argument": "firefox:default-release" in profile_command,
+        "gui_auth_contract": gui_auth_contract,
         "url_actions": url_actions,
         "english_interface": english_interface,
         "cyrillic_strings": cyrillic_strings,
@@ -2701,7 +2774,8 @@ def ui_contract(report_file: str | None = None) -> int:
             and toggled["required_width"] <= 880
             and toggled["required_height"] <= toggled["window_height"]
             and all(flag in sample_command for flag in required_flags)
-            and "edge:Profile 2" in profile_command
+            and "firefox:default-release" in profile_command
+            and all(gui_auth_contract.values())
             and all(url_actions.values())
             and all(english_interface.values())
             and all(callbacks.values())

@@ -148,6 +148,16 @@ $packageUi = Get-Content -LiteralPath $packageUiReport -Raw | ConvertFrom-Json
 if (!$sourceInput.ok -or !$packageInput.ok -or !$packageUi.ok) {
     throw 'One or more verification reports returned ok=false.'
 }
+if ([string]$packageUi.app_version -ne $version) {
+    throw "Packaged application version $($packageUi.app_version) does not match VERSION $version."
+}
+if (
+    !$packageUi.gui_auth_contract.matches_policy -or
+    !$packageUi.gui_auth_contract.chromium_hidden_on_windows -or
+    !$packageUi.gui_auth_contract.firefox_matches_detection
+) {
+    throw 'The packaged Windows authentication-source policy is invalid.'
+}
 
 $verification = [ordered]@{
     schema = 1
@@ -156,13 +166,19 @@ $verification = [ordered]@{
     verified_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     platform = 'Windows x64'
     distribution = 'bootstrap; external media tools are not included'
+    authentication_sources = @($packageUi.initial.cookie_sources)
     checks = [ordered]@{
         python_compile = $true
         source_url_input_self_test = $true
         packaged_url_input_self_test = $true
         packaged_ui_contract = $true
         english_interface_contract = [bool]$packageUi.english_interface.no_cyrillic
-        browser_and_profile_selection = [bool]$packageUi.english_interface.cookie_sources
+        authentication_source_selection = [bool]$packageUi.english_interface.cookie_sources
+        windows_auth_source_policy = [bool](
+            $packageUi.gui_auth_contract.matches_policy -and
+            $packageUi.gui_auth_contract.chromium_hidden_on_windows -and
+            $packageUi.gui_auth_contract.firefox_matches_detection
+        )
     }
 }
 [IO.File]::WriteAllText(

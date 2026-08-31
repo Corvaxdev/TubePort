@@ -43,8 +43,8 @@ TubePort:
 - accepts only recognized YouTube video and Instagram Reel URL shapes;
 - invokes bundled or locally discovered media tools without a shell command
   string;
-- can ask yt-dlp to read an existing browser profile or a selected Netscape
-  `cookies.txt` file;
+- can ask yt-dlp to read a detected Mozilla Firefox profile or a selected
+  Netscape `cookies.txt` file;
 - does not provide an embedded account login form;
 - stores local diagnostic information and attempts to redact cookie-like values
   and media identifiers.

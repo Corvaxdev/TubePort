@@ -60,7 +60,7 @@ $buildInfo = @(
     'License: MIT; see licenses/LICENSE-TubePort-MIT.txt'
     'External tools: not redistributed in this archive'
     'Setup-Tools downloads pinned upstream artifacts and verifies SHA-256 before installation'
-    'Authentication: browser profile or user-selected Netscape cookies.txt; TubePort does not collect passwords'
+    'Authentication: user-selected Netscape cookies.txt; a detected Mozilla Firefox installation may also be offered; TubePort does not collect passwords'
 ) -join "`r`n"
 [IO.File]::WriteAllText(
     (Join-Path $packageRoot 'BUILD_INFO.txt'),
