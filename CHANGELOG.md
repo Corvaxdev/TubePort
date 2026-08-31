@@ -11,6 +11,37 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 - Nothing yet.
 
+## [2.1.4] - 2026-08-31
+
+### Added
+
+- Added **Cancel download** with attempt-scoped cancellation that stops the
+  active downloader process tree.
+- Added **Show downloaded file** after a successful download so File Explorer
+  selects the exact result rather than merely opening a directory.
+
+### Changed
+
+- Resolve the default destination through the Windows Downloads Known Folder
+  API, with registry and profile-directory fallbacks. Redirected and localized
+  Downloads locations are now followed automatically.
+- Renamed the destination controls to **Choose folder…** and **Open save folder**
+  to make their behavior explicit. The directory picker intentionally displays
+  folders only.
+
+### Fixed
+
+- Prevented late progress, completion, and cancellation events from an older
+  attempt from changing the state of a newer download.
+- Made cancellation effective both before and after the downloader subprocess
+  starts, with a clear canceling/canceled state in the interface.
+
+### Verification
+
+- Added deterministic contracts for Windows Known Folder resolution, localized
+  paths, destination/result reveal policy, pre-launch cancellation, process-tree
+  cancellation, and stale-event isolation.
+
 ## [2.1.3] - 2026-08-31
 
 ### Changed
@@ -106,7 +137,8 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 Earlier builds were internal proof-of-concept iterations and are not documented
 as public releases here.
 
-[Unreleased]: ../../compare/v2.1.3...HEAD
+[Unreleased]: ../../compare/v2.1.4...HEAD
+[2.1.4]: ../../compare/v2.1.3...v2.1.4
 [2.1.3]: ../../compare/v2.1.2...v2.1.3
 [2.1.2]: ../../compare/v2.1.1...v2.1.2
 [2.1.1]: ../../releases/tag/v2.1.1

@@ -1,4 +1,4 @@
-TubePort 2.1.3 — Quick Start
+TubePort 2.1.4 — Quick Start
 ================================
 
 1. Extract the entire ZIP archive.
@@ -6,6 +6,20 @@ TubePort 2.1.3 — Quick Start
 3. Wait for the verified tools to finish downloading.
 4. Run TubePort.exe.
 5. Paste a URL, choose your options, and click “Download.”
+
+TubePort uses the current Windows Downloads Known Folder by default, including
+a Downloads location redirected by Windows or the user. File Explorer may show
+the localized name “Загрузки” even when the physical path is named Downloads;
+these are two names for the same folder, not necessarily duplicate folders.
+
+“Choose folder…” is a directory picker and intentionally shows only folders.
+“Open save folder” opens the current destination. After a successful download,
+the button changes to “Show downloaded file” and selects the exact result in
+File Explorer.
+
+To stop an active attempt, click “Cancel download.” TubePort stops the downloader
+process tree and reports the attempt as canceled. It does not delete unrelated
+or pre-existing files; a downloader-created partial file may remain.
 
 You do not need to install Python, yt-dlp, Deno, or FFmpeg manually. The setup
 script downloads pinned upstream releases and verifies every SHA-256 digest

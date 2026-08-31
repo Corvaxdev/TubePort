@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import ctypes
 import hashlib
 import json
 import os
 import platform
 import queue
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -18,7 +20,7 @@ import threading
 import time
 import webbrowser
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -32,7 +34,7 @@ except ImportError:  # Source mode remains usable without the optional theme pac
     sv_ttk = None
 
 APP_NAME = "TubePort"
-APP_VERSION = "2.1.3"
+APP_VERSION = "2.1.4"
 APP_TAGLINE = "Download video or audio from YouTube and Instagram in your preferred format"
 VIDEO_FORMATS = ("MP4", "MKV", "WebM")
 AUDIO_FORMATS = ("MP3", "M4A", "Opus")
@@ -67,10 +69,43 @@ BROWSER_EXECUTABLE_NAMES = {
     "whale": "whale.exe",
 }
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+CREATE_NEW_PROCESS_GROUP = 0x00000200 if os.name == "nt" else 0
 TK_SHIFT_MASK = 0x0001
 TK_CONTROL_MASK = 0x0004
 WINDOWS_VIRTUAL_KEY_V = 86
 COOKIE_EXPORT_HELP_URL = "https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = (
+        ("Data1", ctypes.c_uint32),
+        ("Data2", ctypes.c_uint16),
+        ("Data3", ctypes.c_uint16),
+        ("Data4", ctypes.c_ubyte * 8),
+    )
+
+
+_FOLDERID_DOWNLOADS = _GUID(
+    0x374DE290,
+    0x123F,
+    0x4565,
+    (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B),
+    )
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = (
+        ("dwSize", ctypes.c_uint32),
+        ("cntUsage", ctypes.c_uint32),
+        ("th32ProcessID", ctypes.c_uint32),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", ctypes.c_uint32),
+        ("cntThreads", ctypes.c_uint32),
+        ("th32ParentProcessID", ctypes.c_uint32),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", ctypes.c_uint32),
+        ("szExeFile", ctypes.c_wchar * 260),
+    )
 
 
 def is_url_paste_shortcut(
@@ -120,6 +155,25 @@ class MediaLink:
     media_id: str
     canonical_url: str
     id_ref: str
+
+
+@dataclass
+class DownloadAttempt:
+    attempt_id: int
+    command: list[str]
+    media_type: str
+    output_folder: Path
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    process: subprocess.Popen[str] | None = None
+    termination_started: bool = False
+    termination_finished: threading.Event = field(default_factory=threading.Event)
+    termination_succeeded: bool | None = None
+    failure_monitor_started: bool = False
+    state: str = "starting"
+    result_path: Path | None = None
+    detected_error_kind: str | None = None
+    last_error_line: str | None = None
 
 
 def now_iso() -> str:
@@ -814,21 +868,119 @@ def find_js_runtime() -> tuple[str, str] | None:
     return None
 
 
-def default_download_folder() -> Path:
-    if os.name == "nt":
-        try:
-            import winreg
+def _absolute_folder_candidate(value: str | Path | None) -> Path | None:
+    if value is None or not str(value).strip():
+        return None
+    candidate = Path(os.path.expandvars(str(value))).expanduser()
+    return candidate if candidate.is_absolute() else None
 
-            key_path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
-                value, _kind = winreg.QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")
-            redirected = Path(os.path.expandvars(str(value))).expanduser()
-            if redirected.is_absolute():
-                return redirected
-        except (ImportError, OSError, ValueError):
-            pass
-    downloads = Path.home() / "Downloads"
-    return downloads if downloads.exists() else Path.home()
+
+def _path_from_known_folder_api(get_path: object, free_memory: object) -> Path | None:
+    raw_path = ctypes.c_void_p()
+    try:
+        result = get_path(  # type: ignore[operator]
+            ctypes.byref(_FOLDERID_DOWNLOADS),
+            0,
+            None,
+            ctypes.byref(raw_path),
+        )
+        if ctypes.c_int32(int(result)).value < 0 or not raw_path.value:
+            return None
+        return _absolute_folder_candidate(ctypes.wstring_at(raw_path.value))
+    finally:
+        free_memory(raw_path.value)  # type: ignore[operator]
+
+
+def windows_known_downloads_folder() -> Path | None:
+    """Resolve FOLDERID_Downloads through the Windows Known Folder API."""
+    if os.name != "nt":
+        return None
+    try:
+        shell32 = ctypes.WinDLL("shell32.dll")
+        ole32 = ctypes.WinDLL("ole32.dll")
+        get_path = shell32.SHGetKnownFolderPath
+        get_path.argtypes = (
+            ctypes.POINTER(_GUID),
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        )
+        get_path.restype = ctypes.HRESULT
+        free_memory = ole32.CoTaskMemFree
+        free_memory.argtypes = (ctypes.c_void_p,)
+        free_memory.restype = None
+        return _path_from_known_folder_api(get_path, free_memory)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def windows_registry_downloads_folder() -> Path | None:
+    """Read the documented Downloads known-folder value as an API fallback."""
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            value, _kind = winreg.QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")
+        return _absolute_folder_candidate(str(value))
+    except (ImportError, OSError, TypeError, ValueError):
+        return None
+
+
+def select_default_download_folder(
+    known_folder: str | Path | None,
+    registry_folder: str | Path | None,
+    home_folder: str | Path,
+    *,
+    profile_downloads_exists: bool | None = None,
+) -> tuple[Path, str]:
+    """Choose a portable default and report which resolution layer supplied it."""
+    known = _absolute_folder_candidate(known_folder)
+    if known is not None:
+        return known, "windows_known_folder_api"
+    registry = _absolute_folder_candidate(registry_folder)
+    if registry is not None:
+        return registry, "windows_registry"
+    home = _absolute_folder_candidate(home_folder) or Path.home()
+    downloads = home / "Downloads"
+    downloads_exists = downloads.exists() if profile_downloads_exists is None else profile_downloads_exists
+    if downloads_exists:
+        return downloads, "profile_downloads"
+    return home, "profile_home"
+
+
+def default_download_folder_details() -> tuple[Path, str]:
+    known = windows_known_downloads_folder() if os.name == "nt" else None
+    registry = windows_registry_downloads_folder() if os.name == "nt" else None
+    return select_default_download_folder(known, registry, Path.home())
+
+
+def default_download_folder() -> Path:
+    return default_download_folder_details()[0]
+
+
+def result_reveal_target(
+    last_result: str | Path | None,
+    active_output_folder: str | Path | None,
+    selected_output_folder: str | Path | None,
+) -> tuple[Path | None, str]:
+    """Choose the most accurate existing target for a user-requested reveal."""
+    result = _absolute_folder_candidate(last_result)
+    if result is not None:
+        if result.is_file():
+            return result, "select_file"
+        if result.parent.is_dir():
+            return result.parent, "open_result_parent"
+    for candidate_value, mode in (
+        (active_output_folder, "open_active_output_folder"),
+        (selected_output_folder, "open_selected_output_folder"),
+    ):
+        candidate = _absolute_folder_candidate(candidate_value)
+        if candidate is not None and candidate.is_dir():
+            return candidate, mode
+    return None, "missing"
 
 
 def preferred_temp_folder() -> Path:
@@ -971,12 +1123,12 @@ class DownloaderApp:
         except (OSError, tk.TclError):
             pass
 
-        self.events: queue.Queue[tuple[str, object]] = queue.Queue()
-        self.process: subprocess.Popen[str] | None = None
+        self.events: queue.Queue[tuple[int, str, object]] = queue.Queue()
+        self.attempt_serial = 0
+        self.active_attempt: DownloadAttempt | None = None
         self.last_result: Path | None = None
         self.display_progress = 0.0
         self.busy = False
-        self.cancel_requested = False
         self.close_after_cancel = False
         self.detected_error_kind: str | None = None
         self.last_error_line: str | None = None
@@ -984,6 +1136,7 @@ class DownloaderApp:
         self.active_cookie_browser: str | None = None
         self.active_browser_profile: str | None = None
         self.active_cookies_file: Path | None = None
+        self.active_output_folder: Path | None = None
 
         self.diagnostics = diagnostics_store or DiagnosticsStore()
         self.recent_log: deque[str] = deque(maxlen=120)
@@ -1002,12 +1155,13 @@ class DownloaderApp:
         self.js_runtime = find_js_runtime()
         self.browser_inventory = discover_browser_inventory()
         self.gui_cookie_sources = gui_cookie_source_labels(self.browser_inventory)
+        self.default_output_folder, self.default_output_folder_source = default_download_folder_details()
 
         self.url_var = tk.StringVar()
         self.media_type_var = tk.StringVar(value=MEDIA_VIDEO_LABEL)
         self.quality_var = tk.StringVar(value="1080p")
         self.container_var = tk.StringVar(value="MP4")
-        self.folder_var = tk.StringVar(value=str(default_download_folder()))
+        self.folder_var = tk.StringVar(value=str(self.default_output_folder))
         self.single_video_var = tk.BooleanVar(value=True)
         self.cookies_browser_var = tk.StringVar(value=COOKIE_NONE_LABEL)
         self.cookies_profile_var = tk.StringVar(value=COOKIE_PROFILE_AUTO)
@@ -1032,6 +1186,9 @@ class DownloaderApp:
             tools={"yt_dlp": self.yt_dlp, "ffmpeg": self.ffmpeg, "js_runtime": self.js_runtime},
             browser_inventory=self.browser_inventory,
             gui_cookie_sources=list(self.gui_cookie_sources),
+            default_output_folder=str(self.default_output_folder),
+            default_output_folder_source=self.default_output_folder_source,
+            selected_output_folder=str(self.default_output_folder),
             auth_source="none",
             message="Ready to download",
         )
@@ -1132,16 +1289,16 @@ class DownloaderApp:
         ttk.Label(card, text="Save folder", style="Card.TLabel").grid(row=5, column=0, columnspan=3, sticky="w")
         self.folder_entry = ttk.Entry(card, textvariable=self.folder_var)
         self.folder_entry.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(5, 12), padx=(0, 8))
-        ttk.Button(card, text="Browse…", command=self.choose_folder, style="Secondary.TButton").grid(row=6, column=2, sticky="ew", pady=(5, 12))
+        ttk.Button(card, text="Choose folder…", command=self.choose_folder, style="Secondary.TButton").grid(row=6, column=2, sticky="ew", pady=(5, 12))
 
         action_row = ttk.Frame(card, style="Card.TFrame")
         action_row.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(1, 12))
         action_row.columnconfigure(0, weight=1)
         self.download_button = ttk.Button(action_row, text="Download", command=self.start_download, style="Primary.TButton")
         self.download_button.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.cancel_button = ttk.Button(action_row, text="Cancel", command=self.cancel_download, state="disabled", style="Secondary.TButton")
+        self.cancel_button = ttk.Button(action_row, text="Cancel download", command=self.cancel_download, state="disabled", style="Secondary.TButton")
         self.cancel_button.grid(row=0, column=1, padx=(0, 8))
-        self.open_button = ttk.Button(action_row, text="Open folder", command=self.open_result_folder, style="Secondary.TButton")
+        self.open_button = ttk.Button(action_row, text="Open save folder", command=self.open_result_folder, style="Secondary.TButton")
         self.open_button.grid(row=0, column=2)
         self.diagnostics_button = ttk.Button(action_row, text="Diagnostics", command=self.open_diagnostics, style="Secondary.TButton")
         self.diagnostics_button.grid(row=0, column=3, padx=(8, 0))
@@ -1238,7 +1395,7 @@ class DownloaderApp:
         folder_row.columnconfigure(0, weight=1)
         self.folder_entry = ttk.Entry(folder_row, textvariable=self.folder_var)
         self.folder_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.folder_button = ttk.Button(folder_row, text="Browse…", command=self.choose_folder, style="Secondary.TButton")
+        self.folder_button = ttk.Button(folder_row, text="Choose folder…", command=self.choose_folder, style="Secondary.TButton")
         self.folder_button.grid(row=0, column=1)
 
         self.advanced_button = ttk.Button(
@@ -1310,9 +1467,9 @@ class DownloaderApp:
         action_row.columnconfigure(0, weight=1)
         self.download_button = ttk.Button(action_row, text="Download", command=self.start_download, style="Primary.TButton")
         self.download_button.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.cancel_button = ttk.Button(action_row, text="Cancel", command=self.cancel_download, state="disabled", style="Secondary.TButton")
+        self.cancel_button = ttk.Button(action_row, text="Cancel download", command=self.cancel_download, state="disabled", style="Secondary.TButton")
         self.cancel_button.grid(row=0, column=1, padx=(0, 8))
-        self.open_button = ttk.Button(action_row, text="Open folder", command=self.open_result_folder, style="Secondary.TButton")
+        self.open_button = ttk.Button(action_row, text="Open save folder", command=self.open_result_folder, style="Secondary.TButton")
         self.open_button.grid(row=0, column=2)
 
         self.result_frame = ttk.Frame(card, style="Card.TFrame")
@@ -1642,9 +1799,19 @@ class DownloaderApp:
         self._paste_url_from_clipboard(replace_all=False, notify_empty=False)
 
     def choose_folder(self) -> None:
-        selected = filedialog.askdirectory(initialdir=self.folder_var.get() or str(default_download_folder()))
+        selected = filedialog.askdirectory(
+            title="Choose a save folder (files are hidden in this dialog)",
+            initialdir=self.folder_var.get() or str(default_download_folder()),
+        )
         if selected:
             self.folder_var.set(selected)
+            self.append_log(f"Save folder selected: {selected}")
+            self.record_state(
+                force=True,
+                selected_output_folder=selected,
+                folder_selection_source="user",
+                message="Save folder selected",
+            )
 
     def choose_cookies_file(self) -> bool:
         selected = filedialog.askopenfilename(
@@ -1884,10 +2051,11 @@ class DownloaderApp:
         if not folder_text:
             messagebox.showerror(APP_NAME, "Choose a save folder.")
             return
-        folder = Path(folder_text).expanduser()
+        folder = Path(os.path.expandvars(str(Path(folder_text).expanduser())))
         if not folder.is_absolute():
             messagebox.showerror(APP_NAME, "Enter a full path for the save folder.")
             return
+        folder = Path(os.path.abspath(str(folder)))
         temp_folder = preferred_temp_folder()
         try:
             folder.mkdir(parents=True, exist_ok=True)
@@ -1896,6 +2064,7 @@ class DownloaderApp:
             messagebox.showerror(APP_NAME, f"Could not create the save folder:\n{exc}")
             return
 
+        self.active_output_folder = folder
         self.active_cookie_browser = selected_browser
         self.active_browser_profile = selected_profile
         self.active_cookies_file = selected_cookies_file
@@ -1916,8 +2085,16 @@ class DownloaderApp:
         )
 
         self.last_result = None
+        self.open_button.configure(text="Open save folder")
+        self.attempt_serial += 1
+        attempt = DownloadAttempt(
+            attempt_id=self.attempt_serial,
+            command=command,
+            media_type=media_type,
+            output_folder=folder,
+        )
+        self.active_attempt = attempt
         self.busy = True
-        self.cancel_requested = False
         self.progress_var.set(0)
         self.display_progress = 0.0
         self.percent_label.configure(text="0%")
@@ -1930,6 +2107,9 @@ class DownloaderApp:
         self.record_state(
             force=True,
             phase="starting",
+            attempt_id=attempt.attempt_id,
+            attempt_state="starting",
+            cancellation_requested=False,
             service=service,
             media_id=media_id,
             video_id=media_id if service == "youtube" else None,
@@ -1943,6 +2123,7 @@ class DownloaderApp:
             browser_process_detected=browser_process_detected,
             cookies_file=self.active_cookies_file.name if self.active_cookies_file else None,
             output_folder=str(folder),
+            active_output_folder=str(self.active_output_folder),
             temp_folder=str(temp_folder),
             progress=0.0,
             title=None,
@@ -1955,7 +2136,7 @@ class DownloaderApp:
         )
         self.append_log("Starting yt-dlp…")
 
-        threading.Thread(target=self._download_worker, args=(command, media_type), daemon=True).start()
+        threading.Thread(target=self._download_worker, args=(attempt,), daemon=True).start()
 
     def _reset_attempt_diagnostics(self) -> None:
         self.detected_error_kind = None
@@ -1964,6 +2145,9 @@ class DownloaderApp:
         self.record_state(
             force=True,
             phase="validating",
+            attempt_id=None,
+            attempt_state=None,
+            cancellation_requested=False,
             service=None,
             media_id=None,
             video_id=None,
@@ -1977,43 +2161,54 @@ class DownloaderApp:
             quality=None,
             container=None,
             output_folder=None,
+            active_output_folder=None,
             temp_folder=None,
             progress=0.0,
             title=None,
             speed=None,
             eta=None,
             result_path=None,
+            folder_open_mode=None,
+            folder_open_target=None,
+            folder_open_error=None,
             exit_code=None,
             error_kind=None,
             last_error_line=None,
             message="Validating download request",
         )
 
-    def _download_worker(self, command: list[str], media_type: str) -> None:
+    def _download_worker(self, attempt: DownloadAttempt) -> None:
+        process: subprocess.Popen[str] | None = None
         try:
-            if self.cancel_requested:
-                self.events.put(("done", -2))
+            if attempt.cancel_event.is_set():
+                with attempt.lock:
+                    attempt.state = "exited"
+                self.events.put((attempt.attempt_id, "done", -2))
                 return
-            self.process = subprocess.Popen(
-                command,
+            process = subprocess.Popen(
+                attempt.command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
-                creationflags=CREATE_NO_WINDOW,
+                creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
+                start_new_session=os.name != "nt",
             )
-            if self.cancel_requested:
-                self._terminate_process(self.process)
-            assert self.process.stdout is not None
-            for raw_line in self.process.stdout:
+            with attempt.lock:
+                attempt.process = process
+                attempt.state = "canceling" if attempt.cancel_event.is_set() else "running"
+            if attempt.cancel_event.is_set():
+                self._start_attempt_termination(attempt)
+            assert process.stdout is not None
+            for raw_line in process.stdout:
                 line = raw_line.rstrip("\r\n")
                 classified = classify_diagnostic_error(line)
                 if classified and classified != "probe_error":
-                    if error_kind_priority(classified) >= error_kind_priority(self.detected_error_kind):
-                        self.detected_error_kind = classified
-                        self.last_error_line = redact_diagnostic_line(line)
+                    if error_kind_priority(classified) >= error_kind_priority(attempt.detected_error_kind):
+                        attempt.detected_error_kind = classified
+                        attempt.last_error_line = redact_diagnostic_line(line)
                 if line.startswith("PROGRESS|"):
                     parts = line.split("|", 5)
                     percent_text = parts[1].strip() if len(parts) > 1 else "0%"
@@ -2023,33 +2218,127 @@ class DownloaderApp:
                     acodec = parts[5].strip().lower() if len(parts) > 5 else ""
                     match = re.search(r"([\d.]+)", percent_text)
                     percent = float(match.group(1)) if match else 0.0
-                    if media_type == "video" and vcodec not in {"", "none", "na"} and acodec in {"", "none", "na"}:
+                    if attempt.media_type == "video" and vcodec not in {"", "none", "na"} and acodec in {"", "none", "na"}:
                         percent *= 0.92
-                    elif media_type == "video" and vcodec in {"", "none", "na"} and acodec not in {"", "none", "na"}:
+                    elif attempt.media_type == "video" and vcodec in {"", "none", "na"} and acodec not in {"", "none", "na"}:
                         percent = 92.0 + percent * 0.08
-                    self.events.put(("progress", (percent, speed, eta)))
+                    self.events.put((attempt.attempt_id, "progress", (percent, speed, eta)))
                 elif line.startswith("TITLE:"):
-                    self.events.put(("title", line[6:].strip()))
+                    self.events.put((attempt.attempt_id, "title", line[6:].strip()))
                 elif line.startswith("RESULT:"):
                     result = line[7:].strip()
-                    self.last_result = Path(result)
-                    self.events.put(("log", f"Saved: {result}"))
+                    result_path = Path(result).expanduser()
+                    if not result_path.is_absolute():
+                        result_path = attempt.output_folder / result_path
+                    attempt.result_path = Path(os.path.abspath(str(result_path)))
+                    self.events.put((attempt.attempt_id, "log", f"Saved: {attempt.result_path}"))
                 elif line:
                     if line.startswith(("[Merger]", "[ExtractAudio]", "[VideoRemuxer]", "[Metadata]")):
-                        self.events.put(("processing", None))
-                    self.events.put(("log", line))
+                        self.events.put((attempt.attempt_id, "processing", None))
+                    self.events.put((attempt.attempt_id, "log", line))
 
-            return_code = self.process.wait()
-            self.events.put(("done", -2 if self.cancel_requested else return_code))
+            return_code = process.wait()
+            canceled = attempt.cancel_event.is_set()
+            with attempt.lock:
+                termination_started = attempt.termination_started
+            if canceled and termination_started:
+                attempt.termination_finished.wait(45)
+            with attempt.lock:
+                if canceled and attempt.termination_started:
+                    return
+                termination_succeeded = attempt.termination_succeeded
+                if attempt.process is process:
+                    attempt.process = None
+                attempt.state = "exited"
+            if not canceled:
+                self.events.put((attempt.attempt_id, "done", return_code))
+            elif termination_succeeded is True:
+                return
+            elif termination_succeeded is False:
+                self.events.put(
+                    (
+                        attempt.attempt_id,
+                        "cancel_terminal_failed",
+                        "Could not verify that every downloader child process stopped.",
+                    )
+                )
+            else:
+                self.events.put((attempt.attempt_id, "done", -2))
         except Exception as exc:  # GUI must report failures instead of crashing silently.
-            self.events.put(("error", str(exc)))
+            with attempt.lock:
+                termination_started = attempt.cancel_event.is_set() and attempt.termination_started
+            if termination_started:
+                attempt.termination_finished.wait(45)
+            with attempt.lock:
+                if attempt.cancel_event.is_set() and attempt.termination_started:
+                    return
+                termination_succeeded = attempt.termination_succeeded
+            if attempt.cancel_event.is_set() and termination_succeeded is True:
+                return
+            if attempt.cancel_event.is_set() and termination_succeeded is False:
+                process_is_alive = process is not None and process.poll() is None
+                with attempt.lock:
+                    if not process_is_alive and attempt.process is process:
+                        attempt.process = None
+                    attempt.state = "termination_failed" if process_is_alive else "exited"
+                if process_is_alive:
+                    self.events.put(
+                        (
+                            attempt.attempt_id,
+                            "worker_termination_failed",
+                            f"{exc}; the downloader process tree could not be stopped",
+                        )
+                    )
+                else:
+                    self.events.put(
+                        (
+                            attempt.attempt_id,
+                            "cancel_terminal_failed",
+                            "Could not verify that every downloader child process stopped.",
+                        )
+                    )
+                return
+            process_stopped = process is None
+            if process is not None:
+                try:
+                    process_stopped = self._terminate_process(process)
+                except (OSError, subprocess.SubprocessError):
+                    process_stopped = False
+            with attempt.lock:
+                if process_stopped and attempt.process is process:
+                    attempt.process = None
+                attempt.state = "exited" if process_stopped else "termination_failed"
+            if not process_stopped:
+                self.events.put(
+                    (
+                        attempt.attempt_id,
+                        "worker_termination_failed",
+                        f"{exc}; the downloader process tree could not be stopped",
+                    )
+                )
+            elif attempt.cancel_event.is_set():
+                with attempt.lock:
+                    attempt.termination_succeeded = True
+                self.events.put((attempt.attempt_id, "done", -2))
+            else:
+                self.events.put((attempt.attempt_id, "error", str(exc)))
         finally:
-            self.process = None
+            if process is not None and process.poll() is not None:
+                with attempt.lock:
+                    if attempt.process is process:
+                        attempt.process = None
+                    if attempt.state not in {"canceling", "termination_failed"}:
+                        attempt.state = "exited"
 
     def _poll_events(self) -> None:
         try:
             while True:
-                event, payload = self.events.get_nowait()
+                attempt_id, event, payload = self.events.get_nowait()
+                attempt = self.active_attempt
+                if attempt is None or attempt.attempt_id != attempt_id:
+                    continue
+                if attempt.cancel_event.is_set() and event in {"title", "progress", "processing"}:
+                    continue
                 if event == "log":
                     self.append_log(str(payload))
                 elif event == "title":
@@ -2077,20 +2366,52 @@ class DownloaderApp:
                     self.progress.start(12)
                     self.record_state(force=True, phase="processing", progress=round(self.display_progress, 2), message="Processing file")
                 elif event == "done":
-                    self._finish_download(int(payload))
+                    self._finish_download(attempt, int(payload))
                 elif event == "error":
-                    self._finish_download(-1, str(payload))
+                    self._finish_download(attempt, -1, str(payload))
                 elif event == "cancel_failed":
                     self.status_var.set("Could not stop the process")
                     self.append_log(f"Cancellation error: {payload}")
                     self.record_state(force=True, phase="cancellation_failed", error_kind="cancel_failed", message=str(payload))
-                    if self.process is not None and self.process.poll() is None:
+                    with attempt.lock:
+                        process = attempt.process
+                    if process is not None and process.poll() is None:
                         self.cancel_button.configure(state="normal")
+                    self._start_failed_cancellation_monitor(attempt)
+                elif event == "cancel_terminal_failed":
+                    attempt.detected_error_kind = "cancel_failed"
+                    self._finish_download(attempt, -1, str(payload))
+                elif event == "worker_termination_failed":
+                    self.status_var.set("Downloader process still running")
+                    self.append_log(f"Worker error: {payload}")
+                    self.record_state(
+                        force=True,
+                        phase="worker_termination_failed",
+                        error_kind="cancel_failed",
+                        message=str(payload),
+                    )
+                    with attempt.lock:
+                        process = attempt.process
+                    if process is not None and process.poll() is None:
+                        self.cancel_button.configure(state="normal")
+                        self._start_failed_cancellation_monitor(attempt)
+                    else:
+                        attempt.detected_error_kind = "cancel_failed"
+                        self._finish_download(attempt, -1, str(payload))
         except queue.Empty:
             pass
         self.root.after(100, self._poll_events)
 
-    def _finish_download(self, return_code: int, error: str | None = None) -> None:
+    def _finish_download(self, attempt: DownloadAttempt, return_code: int, error: str | None = None) -> None:
+        if self.active_attempt is not attempt:
+            return
+        self.active_attempt = None
+        # A RESULT line may appear before a later merge error or cancellation.
+        # Only a fully successful attempt may turn the folder button into an
+        # exact-file reveal action; failures and cancellations open the folder.
+        self.last_result = attempt.result_path if return_code == 0 else None
+        self.detected_error_kind = attempt.detected_error_kind
+        self.last_error_line = attempt.last_error_line
         self.busy = False
         self.progress.stop()
         self.progress.configure(mode="determinate")
@@ -2102,6 +2423,9 @@ class DownloaderApp:
             self.record_state(
                 force=True,
                 phase="completed",
+                attempt_id=attempt.attempt_id,
+                attempt_state="exited",
+                cancellation_requested=False,
                 progress=100.0,
                 result_path=str(self.last_result) if self.last_result else None,
                 exit_code=0,
@@ -2112,11 +2436,23 @@ class DownloaderApp:
             if len(result_name) > 74:
                 result_name = result_name[:71].rstrip() + "…"
             self._show_result(f"✓ Done: {result_name}", allow_open=bool(self.last_result))
+            self.open_button.configure(text="Show downloaded file" if self.last_result else "Open save folder")
         elif return_code == -2:
             self.status_var.set("Canceled")
+            self.percent_label.configure(text="canceled")
             self.append_log("Download canceled by the user.")
-            self.record_state(force=True, phase="cancelled", exit_code=-2, error_kind="cancelled", message="Canceled by the user")
-            self._show_result("Download canceled.", error=True)
+            self.record_state(
+                force=True,
+                phase="cancelled",
+                attempt_id=attempt.attempt_id,
+                attempt_state="exited",
+                cancellation_requested=True,
+                exit_code=-2,
+                error_kind="cancelled",
+                message="Canceled by the user",
+            )
+            self._show_result("Download canceled.")
+            self.open_button.configure(text="Open save folder")
         else:
             error_kind = self.detected_error_kind or "download_error"
             status_by_kind = {
@@ -2126,6 +2462,7 @@ class DownloaderApp:
                 "cookies_file_invalid": "cookies.txt was rejected",
                 "authentication_required": "Authentication required",
                 "video_unavailable": "Media unavailable",
+                "cancel_failed": "Could not stop the downloader safely",
             }
             self.status_var.set(status_by_kind.get(error_kind, "Error"))
             if error:
@@ -2133,6 +2470,9 @@ class DownloaderApp:
             self.record_state(
                 force=True,
                 phase="failed",
+                attempt_id=attempt.attempt_id,
+                attempt_state="exited",
+                cancellation_requested=attempt.cancel_event.is_set(),
                 exit_code=return_code,
                 error_kind=error_kind,
                 last_error_line=self.last_error_line,
@@ -2152,53 +2492,240 @@ class DownloaderApp:
                     "authentication_required",
                 },
             )
+            self.open_button.configure(text="Open save folder")
         if self.close_after_cancel:
-            self.root.after(50, self._close_when_process_stops)
+            if return_code in {0, -2}:
+                self.root.after(50, self._close_when_process_stops)
+            else:
+                # A failed cancellation is deliberately left visible.  Closing
+                # here could hide the only warning that a downloader child may
+                # still be alive and needs another stop attempt or manual action.
+                self.close_after_cancel = False
+                self.append_log("Window kept open because cancellation was not verified.")
 
     def _close_when_process_stops(self) -> None:
-        if self.process is None or self.process.poll() is not None:
+        attempt = self.active_attempt
+        if attempt is None:
             self.root.destroy()
-        else:
-            self.root.after(100, self._close_when_process_stops)
+            return
+        with attempt.lock:
+            process = attempt.process
+            state = attempt.state
+        if state == "exited" or process is None or process.poll() is not None:
+            self.root.destroy()
+            return
+        self.root.after(100, self._close_when_process_stops)
 
     def cancel_download(self) -> None:
-        self.cancel_requested = True
-        process = self.process
-        if process is None:
+        attempt = self.active_attempt
+        if not self.busy or attempt is None:
+            return
+        terminal_event: tuple[int, str, object] | None = None
+        with attempt.lock:
+            if attempt.state == "exited":
+                return
+            if attempt.process is not None:
+                return_code = attempt.process.poll()
+            else:
+                return_code = None
+            if return_code is not None:
+                attempt.state = "exited"
+                attempt.process = None
+                if attempt.cancel_event.is_set() or attempt.termination_succeeded is False:
+                    terminal_event = (
+                        attempt.attempt_id,
+                        "cancel_terminal_failed",
+                        "The downloader exited, but the earlier cancellation could not be verified.",
+                    )
+                else:
+                    terminal_event = (attempt.attempt_id, "done", return_code)
+            else:
+                attempt.cancel_event.set()
+                attempt.state = "canceling"
+        if terminal_event is not None:
+            self.events.put(terminal_event)
             return
         self.status_var.set("Canceling…")
         self.cancel_button.configure(state="disabled")
-        threading.Thread(target=self._cancel_worker, args=(process,), daemon=False).start()
+        self.append_log(f"Cancellation requested: attempt={attempt.attempt_id}")
+        self.record_state(
+            force=True,
+            phase="canceling",
+            attempt_id=attempt.attempt_id,
+            attempt_state="canceling",
+            cancellation_requested=True,
+            error_kind="cancel_requested",
+            message="Stopping yt-dlp and its child processes",
+        )
+        self._start_attempt_termination(attempt)
 
-    def _cancel_worker(self, process: subprocess.Popen[str]) -> None:
+    def _start_failed_cancellation_monitor(self, attempt: DownloadAttempt) -> None:
+        with attempt.lock:
+            if attempt.failure_monitor_started or attempt.state == "exited":
+                return
+            attempt.failure_monitor_started = True
+        self.root.after(100, lambda current=attempt: self._monitor_failed_cancellation(current))
+
+    def _monitor_failed_cancellation(self, attempt: DownloadAttempt) -> None:
+        if self.active_attempt is not attempt:
+            return
+        with attempt.lock:
+            process = attempt.process
+            termination_started = attempt.termination_started
+            termination_succeeded = attempt.termination_succeeded
+        if termination_succeeded is True:
+            return
+        if termination_started:
+            self.root.after(100, lambda current=attempt: self._monitor_failed_cancellation(current))
+            return
         try:
-            if not self._terminate_process(process):
-                self.events.put(("cancel_failed", "Could not stop the yt-dlp/ffmpeg process."))
-        except (OSError, subprocess.SubprocessError) as exc:
-            self.events.put(("cancel_failed", str(exc)))
+            process_stopped = process is None or process.poll() is not None
+        except (OSError, subprocess.SubprocessError):
+            process_stopped = False
+        if not process_stopped:
+            self.root.after(250, lambda current=attempt: self._monitor_failed_cancellation(current))
+            return
+        with attempt.lock:
+            if attempt.process is process:
+                attempt.process = None
+            attempt.state = "exited"
+            attempt.failure_monitor_started = False
+        self.events.put(
+            (
+                attempt.attempt_id,
+                "cancel_terminal_failed",
+                "The downloader exited, but the earlier cancellation could not be verified.",
+            )
+        )
+
+    def _start_attempt_termination(self, attempt: DownloadAttempt) -> bool:
+        with attempt.lock:
+            process = attempt.process
+            if (
+                attempt.state == "exited"
+                or attempt.termination_started
+                or process is None
+                or process.poll() is not None
+            ):
+                return False
+            attempt.termination_started = True
+            attempt.termination_finished.clear()
+            attempt.termination_succeeded = None
+        try:
+            threading.Thread(target=self._cancel_worker, args=(attempt, process), daemon=False).start()
+        except RuntimeError as exc:
+            with attempt.lock:
+                attempt.termination_started = False
+                attempt.termination_succeeded = False
+                attempt.termination_finished.set()
+            self.events.put((attempt.attempt_id, "cancel_failed", str(exc)))
+            return False
+        return True
+
+    def _cancel_worker(self, attempt: DownloadAttempt, process: subprocess.Popen[str]) -> None:
+        error: str | None = None
+        succeeded = False
+        try:
+            succeeded = self._terminate_process(process)
+            if not succeeded:
+                error = "Could not stop the yt-dlp/ffmpeg process tree."
+        except Exception as exc:  # A failed terminator must never strand the GUI in busy state.
+            error = str(exc)
+        with attempt.lock:
+            attempt.termination_started = False
+            attempt.termination_succeeded = succeeded
+            if succeeded:
+                attempt.state = "exited"
+            elif attempt.state != "exited":
+                attempt.state = "cancellation_failed"
+            attempt.termination_finished.set()
+        if succeeded:
+            self.events.put((attempt.attempt_id, "done", -2))
+        else:
+            self.events.put((attempt.attempt_id, "cancel_failed", error))
 
     @staticmethod
     def _terminate_process(process: subprocess.Popen[str]) -> bool:
-        if process.poll() is not None:
-            return True
         if os.name == "nt":
+            if process.poll() is not None:
+                return False
+            root_process_id = int(process.pid)
+            initial_descendants, snapshot_ok = windows_process_tree_snapshot(root_process_id)
+            snapshot_verified = snapshot_ok
+            owned_process_ids = [*initial_descendants, root_process_id]
+            taskkill_succeeded = False
+            taskkill_path = (
+                Path(os.environ.get("SystemRoot", r"C:\Windows"))
+                / "System32"
+                / "taskkill.exe"
+            )
+            if taskkill_path.is_file() and process.poll() is None:
+                try:
+                    taskkill_result = subprocess.run(
+                        [str(taskkill_path), "/PID", str(root_process_id), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=CREATE_NO_WINDOW,
+                        check=False,
+                        timeout=8,
+                    )
+                    taskkill_succeeded = taskkill_result.returncode == 0
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            for _attempt in range(2):
+                additional_descendants, _additional_snapshot_ok = windows_process_tree_snapshot(root_process_id)
+                for descendant in additional_descendants:
+                    if descendant not in owned_process_ids:
+                        owned_process_ids.insert(-1, descendant)
+                living = [
+                    process_id
+                    for process_id in owned_process_ids
+                    if (
+                        process.poll() is None
+                        if process_id == root_process_id
+                        else windows_process_status(process_id) is not False
+                    )
+                ]
+                if not living:
+                    break
+                descendants = [process_id for process_id in living if process_id != root_process_id]
+                for process_id in reversed(descendants):
+                    if windows_process_status(process_id) is not False:
+                        windows_force_terminate_process(process_id)
+                if process.poll() is None:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
             try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=CREATE_NO_WINDOW,
-                    check=False,
-                    timeout=8,
-                )
+                process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 pass
-        else:
-            process.terminate()
+            if process.poll() is None:
+                return False
+            descendant_states = [
+                windows_process_status(process_id)
+                for process_id in owned_process_ids
+                if process_id != root_process_id
+            ]
+            if any(state is True for state in descendant_states):
+                return False
+            if any(state is None for state in descendant_states):
+                return taskkill_succeeded
+            return snapshot_verified or taskkill_succeeded
+        if process.poll() is not None:
+            return True
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return True
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            process.kill()
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return True
             try:
                 process.wait(timeout=3)
             except subprocess.TimeoutExpired:
@@ -2218,17 +2745,43 @@ class DownloaderApp:
             messagebox.showerror(APP_NAME, f"Could not open the file:\n{exc}")
 
     def open_result_folder(self) -> None:
-        target = self.last_result.parent if self.last_result and self.last_result.exists() else Path(self.folder_var.get())
-        if not target.exists():
+        target, mode = result_reveal_target(
+            self.last_result,
+            self.active_output_folder,
+            self.folder_var.get(),
+        )
+        if target is None:
             messagebox.showerror(APP_NAME, "The folder does not exist yet.")
+            self.record_state(
+                force=True,
+                folder_open_mode=mode,
+                folder_open_target=None,
+                folder_open_error="No existing output folder was found",
+            )
             return
         try:
-            if os.name == "nt":
+            if os.name == "nt" and mode == "select_file":
+                subprocess.Popen(["explorer.exe", "/select,", str(target)])
+            elif os.name == "nt":
                 os.startfile(target)  # type: ignore[attr-defined]
             else:
-                subprocess.Popen(["xdg-open", str(target)])
+                subprocess.Popen(["xdg-open", str(target.parent if mode == "select_file" else target)])
+            self.append_log(f"Opened output location: mode={mode}; target={target}")
+            self.record_state(
+                force=True,
+                folder_open_mode=mode,
+                folder_open_target=str(target),
+                folder_open_error=None,
+                message="Output location opened",
+            )
         except OSError as exc:
             messagebox.showerror(APP_NAME, f"Could not open the folder:\n{exc}")
+            self.record_state(
+                force=True,
+                folder_open_mode=mode,
+                folder_open_target=str(target),
+                folder_open_error=str(exc),
+            )
 
     def on_close(self) -> None:
         if self.busy:
@@ -2270,6 +2823,246 @@ def url_input_self_test(report_file: str | None = None) -> int:
     }
     emit_json(result, report_file)
     return 0 if ok else 1
+
+
+def windows_process_tree_snapshot(root_process_id: int) -> tuple[list[int], bool]:
+    """Return current descendants and whether the Toolhelp snapshot was trustworthy."""
+    if os.name != "nt" or root_process_id <= 0:
+        return [], False
+    snapshot: int | None = None
+    try:
+        kernel32 = ctypes.WinDLL("kernel32.dll", use_last_error=True)
+        create_snapshot = kernel32.CreateToolhelp32Snapshot
+        create_snapshot.argtypes = (ctypes.c_uint32, ctypes.c_uint32)
+        create_snapshot.restype = ctypes.c_void_p
+        process_first = kernel32.Process32FirstW
+        process_first.argtypes = (ctypes.c_void_p, ctypes.POINTER(_PROCESSENTRY32W))
+        process_first.restype = ctypes.c_int
+        process_next = kernel32.Process32NextW
+        process_next.argtypes = (ctypes.c_void_p, ctypes.POINTER(_PROCESSENTRY32W))
+        process_next.restype = ctypes.c_int
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (ctypes.c_void_p,)
+        close_handle.restype = ctypes.c_int
+        snapshot = create_snapshot(0x00000002, 0)
+        if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+            return [], False
+        children_by_parent: dict[int, list[int]] = {}
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+        has_entry = bool(process_first(snapshot, ctypes.byref(entry)))
+        if not has_entry:
+            return [], False
+        while has_entry:
+            process_id = int(entry.th32ProcessID)
+            parent_id = int(entry.th32ParentProcessID)
+            if process_id > 0 and process_id != parent_id:
+                children_by_parent.setdefault(parent_id, []).append(process_id)
+            entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+            has_entry = bool(process_next(snapshot, ctypes.byref(entry)))
+        descendants: list[int] = []
+        pending = list(children_by_parent.get(root_process_id, ()))
+        seen = {root_process_id}
+        while pending:
+            process_id = pending.pop(0)
+            if process_id in seen:
+                continue
+            seen.add(process_id)
+            descendants.append(process_id)
+            pending.extend(children_by_parent.get(process_id, ()))
+        return descendants, True
+    except (AttributeError, OSError, TypeError, ValueError):
+        return [], False
+    finally:
+        if snapshot and snapshot != ctypes.c_void_p(-1).value:
+            close_handle(snapshot)
+
+
+def windows_descendant_process_ids(root_process_id: int) -> list[int]:
+    return windows_process_tree_snapshot(root_process_id)[0]
+
+
+def windows_process_status(process_id: int | None) -> bool | None:
+    """Return True/False for active/exited, or None when Windows denies the query."""
+    if os.name != "nt" or not process_id or process_id <= 0:
+        return False
+    process_query_limited_information = 0x1000
+    still_active = 259
+    handle: int | None = None
+    try:
+        kernel32 = ctypes.WinDLL("kernel32.dll", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+        open_process.restype = ctypes.c_void_p
+        get_exit_code = kernel32.GetExitCodeProcess
+        get_exit_code.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32))
+        get_exit_code.restype = ctypes.c_int
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (ctypes.c_void_p,)
+        close_handle.restype = ctypes.c_int
+        handle = open_process(process_query_limited_information, 0, process_id)
+        if not handle:
+            return False if ctypes.get_last_error() == 87 else None
+        exit_code = ctypes.c_uint32()
+        if not get_exit_code(handle, ctypes.byref(exit_code)):
+            return None
+        return exit_code.value == still_active
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    finally:
+        if handle:
+            close_handle(handle)
+
+
+def windows_process_is_running(process_id: int | None) -> bool:
+    return windows_process_status(process_id) is True
+
+
+def windows_force_terminate_process(process_id: int) -> bool:
+    """Terminate one already-owned Windows PID and wait briefly for its exit."""
+    if os.name != "nt" or process_id <= 0:
+        return False
+    if windows_process_status(process_id) is False:
+        return True
+    handle: int | None = None
+    try:
+        kernel32 = ctypes.WinDLL("kernel32.dll", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+        open_process.restype = ctypes.c_void_p
+        terminate_process = kernel32.TerminateProcess
+        terminate_process.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        terminate_process.restype = ctypes.c_int
+        wait_for_single_object = kernel32.WaitForSingleObject
+        wait_for_single_object.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        wait_for_single_object.restype = ctypes.c_uint32
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (ctypes.c_void_p,)
+        close_handle.restype = ctypes.c_int
+        process_terminate = 0x0001
+        synchronize = 0x00100000
+        handle = open_process(process_terminate | synchronize, 0, process_id)
+        if not handle:
+            return windows_process_status(process_id) is False
+        if not terminate_process(handle, 1):
+            return windows_process_status(process_id) is False
+        wait_for_single_object(handle, 1000)
+        return windows_process_status(process_id) is False
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+    finally:
+        if handle:
+            close_handle(handle)
+
+
+def cancellation_self_test(report_file: str | None = None) -> int:
+    """Own a harmless process tree, cancel it, and verify that no child survives."""
+    report_path = (
+        Path(report_file).expanduser().resolve()
+        if report_file
+        else diagnostics_root() / "cancellation-self-test.json"
+    )
+    checks = {
+        "windows_supported": os.name == "nt",
+        "powershell_found": False,
+        "root_started": False,
+        "child_started": False,
+        "child_discovered": False,
+        "termination_succeeded": False,
+        "root_stopped": False,
+        "child_stopped": False,
+        "marker_removed": False,
+    }
+    error: str | None = None
+    process: subprocess.Popen[str] | None = None
+    child_process_id: int | None = None
+    marker_path = report_path.parent / f".tubeport-cancel-self-test-{os.getpid()}-{time.time_ns()}.pid"
+    try:
+        if os.name != "nt":
+            raise OSError("The release cancellation contract is supported on Windows only.")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        powershell = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+        if not powershell.is_file():
+            fallback = shutil.which("powershell.exe")
+            powershell = Path(fallback) if fallback else powershell
+        checks["powershell_found"] = powershell.is_file()
+        if not checks["powershell_found"]:
+            raise OSError("Windows PowerShell was not found.")
+        helper_script = (
+            "$child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\\PING.EXE') "
+            "-ArgumentList @('-t','127.0.0.1') -WindowStyle Hidden -PassThru; "
+            "[IO.File]::WriteAllText($env:TUBEPORT_CANCEL_TEST_MARKER, [string]$child.Id); "
+            "Wait-Process -Id $child.Id"
+        )
+        helper_environment = os.environ.copy()
+        helper_environment["TUBEPORT_CANCEL_TEST_MARKER"] = str(marker_path)
+        process = subprocess.Popen(
+            [
+                str(powershell),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                helper_script,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
+            env=helper_environment,
+        )
+        checks["root_started"] = process.poll() is None
+        marker_deadline = time.monotonic() + 8
+        while time.monotonic() < marker_deadline and not marker_path.is_file():
+            if process.poll() is not None:
+                break
+            time.sleep(0.05)
+        if not marker_path.is_file():
+            raise OSError("The cancellation helper did not report its child PID.")
+        child_process_id = int(marker_path.read_text(encoding="utf-8").strip())
+        checks["child_started"] = windows_process_is_running(child_process_id)
+        if not checks["child_started"]:
+            raise OSError("The cancellation helper child did not start.")
+        checks["child_discovered"] = child_process_id in windows_descendant_process_ids(process.pid)
+        if not checks["child_discovered"]:
+            raise OSError("The cancellation helper child was not found in the owned process tree.")
+        checks["termination_succeeded"] = DownloaderApp._terminate_process(process)
+        child_deadline = time.monotonic() + 5
+        while time.monotonic() < child_deadline and windows_process_is_running(child_process_id):
+            time.sleep(0.05)
+        checks["root_stopped"] = process.poll() is not None
+        checks["child_stopped"] = not windows_process_is_running(child_process_id)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        error = str(exc)
+    finally:
+        if process is not None and process.poll() is None:
+            try:
+                DownloaderApp._terminate_process(process)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        if child_process_id and windows_process_is_running(child_process_id):
+            try:
+                windows_force_terminate_process(child_process_id)
+            except OSError:
+                pass
+        try:
+            marker_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        checks["marker_removed"] = not marker_path.exists()
+    result = {
+        "schema": 1,
+        "app_version": APP_VERSION,
+        "checks": checks,
+        "error": error,
+        "ok": all(checks.values()),
+    }
+    emit_json(result, report_path)
+    return 0 if result["ok"] else 1
 
 
 def self_test(report_file: str | None = None) -> int:
@@ -2479,10 +3272,15 @@ def ui_contract(report_file: str | None = None) -> int:
         "media_type": app.media_type_var.get(),
         "quality": app.quality_var.get(),
         "container": app.container_var.get(),
+        "folder": app.folder_var.get(),
+        "folder_button": str(app.folder_button.cget("text")),
+        "open_folder_button": str(app.open_button.cget("text")),
         "cookie_sources": list(app.cookies_combo.cget("values")),
         "cookie_profile": app.cookies_profile_var.get(),
         "download_button": str(app.download_button.cget("text")),
+        "cancel_button": str(app.cancel_button.cget("text")),
         "cancel_state": str(app.cancel_button.cget("state")),
+        "default_output_folder_source": app.default_output_folder_source,
     }
     actual_cookie_sources = tuple(initial["cookie_sources"])
     expected_cookie_sources = gui_cookie_source_labels(app.browser_inventory)
@@ -2636,6 +3434,106 @@ def ui_contract(report_file: str | None = None) -> int:
         "persisted_process_reset": persisted_reset.get("browser_process_detected") is False,
     }
 
+    from uuid import UUID
+
+    unicode_known_folder = r"D:\Перенесённые загрузки"
+    known_folder_buffer = ctypes.create_unicode_buffer(unicode_known_folder)
+    freed_success: list[int | None] = []
+    freed_failure: list[int | None] = []
+    freed_null: list[int | None] = []
+
+    def fake_known_folder_success(
+        _folder_id: object,
+        _flags: object,
+        _token: object,
+        output: object,
+    ) -> int:
+        ctypes.cast(output, ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.addressof(known_folder_buffer)
+        return 0
+
+    def fake_known_folder_failure(
+        _folder_id: object,
+        _flags: object,
+        _token: object,
+        output: object,
+    ) -> int:
+        ctypes.cast(output, ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.addressof(known_folder_buffer)
+        return 0x80004005
+
+    def fake_known_folder_null(
+        _folder_id: object,
+        _flags: object,
+        _token: object,
+        output: object,
+    ) -> int:
+        ctypes.cast(output, ctypes.POINTER(ctypes.c_void_p))[0] = None
+        return 0
+
+    known_success = _path_from_known_folder_api(fake_known_folder_success, freed_success.append)
+    known_failure = _path_from_known_folder_api(fake_known_folder_failure, freed_failure.append)
+    known_null = _path_from_known_folder_api(fake_known_folder_null, freed_null.append)
+    synthetic_home = Path.cwd().resolve() / "__tubeport_contract_home__"
+    synthetic_known = synthetic_home / "Known Downloads"
+    synthetic_registry = synthetic_home / "Registry Downloads"
+    known_choice = select_default_download_folder(synthetic_known, synthetic_registry, synthetic_home)
+    registry_choice = select_default_download_folder(None, synthetic_registry, synthetic_home)
+    profile_choice = select_default_download_folder(
+        None,
+        None,
+        synthetic_home,
+        profile_downloads_exists=True,
+    )
+    home_choice = select_default_download_folder(
+        None,
+        None,
+        synthetic_home,
+        profile_downloads_exists=False,
+    )
+    folder_resolution_contract = {
+        "guid_size": ctypes.sizeof(_FOLDERID_DOWNLOADS) == 16,
+        "guid_bytes": (
+            ctypes.string_at(ctypes.byref(_FOLDERID_DOWNLOADS), ctypes.sizeof(_FOLDERID_DOWNLOADS))
+            == UUID("374DE290-123F-4565-9164-39C4925E467B").bytes_le
+        ),
+        "unicode_path": known_success == Path(unicode_known_folder),
+        "success_memory_freed_once": len(freed_success) == 1 and bool(freed_success[0]),
+        "failure_rejected": known_failure is None,
+        "failure_memory_freed_once": len(freed_failure) == 1 and bool(freed_failure[0]),
+        "null_rejected": known_null is None,
+        "null_free_is_safe": freed_null == [None],
+        "api_priority": known_choice == (synthetic_known, "windows_known_folder_api"),
+        "registry_fallback": registry_choice == (synthetic_registry, "windows_registry"),
+        "profile_downloads_fallback": profile_choice == (synthetic_home / "Downloads", "profile_downloads"),
+        "home_fallback": home_choice == (synthetic_home, "profile_home"),
+        "ui_uses_resolved_default": Path(str(initial["folder"])) == app.default_output_folder,
+        "runtime_source_reported": initial["default_output_folder_source"] in {
+            "windows_known_folder_api",
+            "windows_registry",
+            "profile_downloads",
+            "profile_home",
+        },
+    }
+
+    existing_contract_file = Path(sys.executable).resolve()
+    missing_result = existing_contract_file.parent / f"__tubeport_missing_result_{os.getpid()}__.mp4"
+    missing_folder = existing_contract_file.parent / f"__tubeport_missing_folder_{os.getpid()}__"
+    file_target, file_mode = result_reveal_target(existing_contract_file, None, None)
+    parent_target, parent_mode = result_reveal_target(missing_result, None, None)
+    active_target, active_mode = result_reveal_target(None, existing_contract_file.parent, None)
+    selected_target, selected_mode = result_reveal_target(
+        None,
+        missing_folder,
+        existing_contract_file.parent,
+    )
+    absent_target, absent_mode = result_reveal_target(None, missing_folder, missing_folder)
+    result_reveal_contract = {
+        "selects_existing_result": file_target == existing_contract_file and file_mode == "select_file",
+        "missing_result_opens_parent": parent_target == existing_contract_file.parent and parent_mode == "open_result_parent",
+        "active_output_has_priority": active_target == existing_contract_file.parent and active_mode == "open_active_output_folder",
+        "selected_output_fallback": selected_target == existing_contract_file.parent and selected_mode == "open_selected_output_folder",
+        "missing_target_reported": absent_target is None and absent_mode == "missing",
+    }
+
     original_file_dialog = filedialog.askopenfilename
     try:
         app.cookies_browser_var.set("Google Chrome")
@@ -2693,10 +3591,556 @@ def ui_contract(report_file: str | None = None) -> int:
         threading.Thread = original_thread
         globals()["find_browser_executable"] = original_find_browser
         globals()["browser_process_running"] = original_process_check
+        app.active_attempt = None
         app.busy = False
         app._set_busy_state(False)
         app.cookies_browser_var.set(COOKIE_NONE_LABEL)
         app._refresh_auth_controls()
+
+    cancellation_threads: list[tuple[object, tuple[object, ...]]] = []
+
+    class DeferredCancellationThread:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.target = kwargs.get("target") or (args[0] if args else None)
+            thread_args = kwargs.get("args", ())
+            self.args = tuple(thread_args) if isinstance(thread_args, (tuple, list)) else ()
+
+        def start(self) -> None:
+            cancellation_threads.append((self.target, self.args))
+
+    class FakeRunningProcess:
+        pid = 4242
+
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    class FakeExitedProcess:
+        pid = 4343
+
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+    def clear_contract_events() -> None:
+        try:
+            while True:
+                app.events.get_nowait()
+        except queue.Empty:
+            pass
+
+    cancellation_contract: dict[str, bool] = {}
+    try:
+        threading.Thread = DeferredCancellationThread  # type: ignore[assignment]
+        clear_contract_events()
+
+        prelaunch_attempt = DownloadAttempt(9001, [], "video", existing_contract_file.parent)
+        app.active_attempt = prelaunch_attempt
+        app._set_busy_state(True)
+        app.cancel_download()
+        prelaunch_phase = app.diagnostics.read_state().get("phase")
+        prelaunch_status = app.status_var.get()
+        prelaunch_button_state = str(app.cancel_button.cget("state"))
+        prelaunch_threads = len(cancellation_threads)
+        app._download_worker(prelaunch_attempt)
+        prelaunch_event = app.events.get_nowait()
+        cancellation_contract.update(
+            {
+                "prelaunch_request_is_immediate": (
+                    prelaunch_status == "Canceling…"
+                    and prelaunch_button_state == "disabled"
+                    and prelaunch_phase == "canceling"
+                ),
+                "prelaunch_process_not_spawned": (
+                    prelaunch_attempt.process is None
+                    and prelaunch_threads == 0
+                    and prelaunch_attempt.state == "exited"
+                ),
+                "prelaunch_finishes_as_canceled": prelaunch_event == (9001, "done", -2),
+            }
+        )
+
+        clear_contract_events()
+        running_attempt = DownloadAttempt(9002, [], "video", existing_contract_file.parent)
+        running_attempt.process = FakeRunningProcess()  # type: ignore[assignment]
+        running_attempt.state = "running"
+        app.active_attempt = running_attempt
+        app._set_busy_state(True)
+        threads_before_running = len(cancellation_threads)
+        app.cancel_download()
+        threads_after_first_cancel = len(cancellation_threads)
+        app.cancel_download()
+        threads_after_second_cancel = len(cancellation_threads)
+        queued_target, queued_args = cancellation_threads[-1]
+        cancellation_contract.update(
+            {
+                "running_request_sets_token": running_attempt.cancel_event.is_set() and running_attempt.state == "canceling",
+                "one_terminator_per_attempt": (
+                    threads_after_first_cancel == threads_before_running + 1
+                    and threads_after_second_cancel == threads_after_first_cancel
+                    and running_attempt.termination_started
+                ),
+                "terminator_receives_attempt_and_process": (
+                    getattr(queued_target, "__name__", "") == "_cancel_worker"
+                    and len(queued_args) == 2
+                    and queued_args[0] is running_attempt
+                    and queued_args[1] is running_attempt.process
+                ),
+            }
+        )
+
+        exited_attempt = DownloadAttempt(9003, [], "video", existing_contract_file.parent)
+        exited_attempt.process = FakeExitedProcess()  # type: ignore[assignment]
+        exited_attempt.state = "running"
+        app.active_attempt = exited_attempt
+        app._set_busy_state(True)
+        app.status_var.set("Already finished")
+        threads_before_late_cancel = len(cancellation_threads)
+        app.cancel_download()
+        app._poll_events()
+        cancellation_contract.update(
+            {
+                "late_cancel_is_not_misreported": (
+                    not exited_attempt.cancel_event.is_set()
+                    and exited_attempt.state == "exited"
+                    and app.active_attempt is None
+                    and not app.busy
+                    and app.status_var.get() == "Done"
+                    and app.diagnostics.read_state().get("phase") == "completed"
+                    and len(cancellation_threads) == threads_before_late_cancel
+                ),
+            }
+        )
+
+        class RaisingOutput:
+            def __iter__(self) -> RaisingOutput:
+                return self
+
+            @staticmethod
+            def __next__() -> str:
+                raise OSError("synthetic stdout read failure")
+
+        class FakeWorkerProcess:
+            pid = 4444
+
+            def __init__(self) -> None:
+                self.stdout = RaisingOutput()
+                self.alive = True
+
+            def poll(self) -> int | None:
+                return None if self.alive else 1
+
+        fake_worker_process = FakeWorkerProcess()
+        worker_termination_calls: list[object] = []
+        original_popen = subprocess.Popen
+
+        def fake_worker_terminate(process: object) -> bool:
+            worker_termination_calls.append(process)
+            fake_worker_process.alive = False
+            return True
+
+        try:
+            subprocess.Popen = lambda *_args, **_kwargs: fake_worker_process  # type: ignore[assignment]
+            app._terminate_process = fake_worker_terminate  # type: ignore[method-assign]
+            worker_failure_attempt = DownloadAttempt(9005, ["synthetic"], "video", existing_contract_file.parent)
+            app._download_worker(worker_failure_attempt)
+            worker_failure_event = app.events.get_nowait()
+            worker_exception_contract = {
+                "terminator_called_once": worker_termination_calls == [fake_worker_process],
+                "process_stopped": not fake_worker_process.alive,
+                "process_reference_cleared": worker_failure_attempt.process is None,
+                "attempt_exited": worker_failure_attempt.state == "exited",
+                "terminal_event_attempt": worker_failure_event[0] == 9005,
+                "terminal_event_type": worker_failure_event[1] == "error",
+                "terminal_event_queued": worker_failure_event[0:2] == (9005, "error"),
+            }
+            cancellation_contract.update(
+                {f"worker_exception_{name}": passed for name, passed in worker_exception_contract.items()}
+            )
+            cancellation_contract["worker_exception_stops_process_first"] = all(worker_exception_contract.values())
+        finally:
+            subprocess.Popen = original_popen  # type: ignore[assignment]
+            del app._terminate_process
+
+        late_exit_process = FakeWorkerProcess()
+        try:
+            subprocess.Popen = lambda *_args, **_kwargs: late_exit_process  # type: ignore[assignment]
+            app._terminate_process = lambda _process: False  # type: ignore[method-assign]
+            late_exit_attempt = DownloadAttempt(9010, ["synthetic"], "video", existing_contract_file.parent)
+            app.active_attempt = late_exit_attempt
+            app._set_busy_state(True)
+            app._download_worker(late_exit_attempt)
+            app._poll_events()
+            retry_before_late_exit = (
+                app.active_attempt is late_exit_attempt
+                and app.busy
+                and str(app.cancel_button.cget("state")) == "normal"
+                and late_exit_attempt.failure_monitor_started
+            )
+            late_exit_process.alive = False
+            app._monitor_failed_cancellation(late_exit_attempt)
+            app._poll_events()
+            cancellation_contract["failed_worker_then_natural_exit_is_terminal"] = (
+                retry_before_late_exit
+                and app.active_attempt is None
+                and not app.busy
+                and app.status_var.get() == "Could not stop the downloader safely"
+                and app.diagnostics.read_state().get("error_kind") == "cancel_failed"
+            )
+        finally:
+            subprocess.Popen = original_popen  # type: ignore[assignment]
+            del app._terminate_process
+            clear_contract_events()
+
+        terminator_exception_attempt = DownloadAttempt(9008, [], "video", existing_contract_file.parent)
+        terminator_exception_process = FakeRunningProcess()
+        terminator_exception_attempt.process = terminator_exception_process  # type: ignore[assignment]
+        terminator_exception_attempt.cancel_event.set()
+        terminator_exception_attempt.state = "canceling"
+        terminator_exception_attempt.termination_started = True
+        terminator_exception_attempt.termination_finished.clear()
+        app.active_attempt = terminator_exception_attempt
+        app._set_busy_state(True)
+
+        def raise_terminator_runtime_error(_process: object) -> bool:
+            raise RuntimeError("synthetic terminator failure")
+
+        try:
+            app._terminate_process = raise_terminator_runtime_error  # type: ignore[method-assign]
+            app._cancel_worker(terminator_exception_attempt, terminator_exception_process)  # type: ignore[arg-type]
+        finally:
+            del app._terminate_process
+        app._poll_events()
+        cancellation_contract["terminator_exception_allows_retry_without_hang"] = (
+            terminator_exception_attempt.termination_started is False
+            and terminator_exception_attempt.termination_succeeded is False
+            and terminator_exception_attempt.termination_finished.is_set()
+            and terminator_exception_attempt.state == "cancellation_failed"
+            and app.active_attempt is terminator_exception_attempt
+            and app.busy
+            and str(app.cancel_button.cget("state")) == "normal"
+            and app.diagnostics.read_state().get("phase") == "cancellation_failed"
+        )
+        app.active_attempt = None
+        app._set_busy_state(False)
+        clear_contract_events()
+
+        barrier_entered = threading.Event()
+        barrier_release = threading.Event()
+
+        class FakeBarrierProcess:
+            pid = 4545
+
+            def __init__(self) -> None:
+                self.stdout: tuple[str, ...] = ()
+                self.alive = True
+
+            def poll(self) -> int | None:
+                return None if self.alive else 0
+
+            def wait(self, timeout: float | None = None) -> int:
+                del timeout
+                self.alive = False
+                return 0
+
+        barrier_process = FakeBarrierProcess()
+
+        def fake_barrier_popen(*_args: object, **_kwargs: object) -> FakeBarrierProcess:
+            barrier_entered.set()
+            if not barrier_release.wait(5):
+                raise TimeoutError("synthetic Popen barrier timed out")
+            return barrier_process
+
+        try:
+            subprocess.Popen = fake_barrier_popen  # type: ignore[assignment]
+            barrier_attempt = DownloadAttempt(9006, ["synthetic"], "video", existing_contract_file.parent)
+            app.active_attempt = barrier_attempt
+            app._set_busy_state(True)
+            barrier_threads_before = len(cancellation_threads)
+            worker_thread = original_thread(target=app._download_worker, args=(barrier_attempt,), daemon=True)
+            worker_thread.start()
+            entered_before_cancel = barrier_entered.wait(5)
+            app.cancel_download()
+            no_early_terminator = len(cancellation_threads) == barrier_threads_before
+            barrier_release.set()
+            dispatch_deadline = time.monotonic() + 5
+            while len(cancellation_threads) == barrier_threads_before and time.monotonic() < dispatch_deadline:
+                time.sleep(0.01)
+            if len(cancellation_threads) == barrier_threads_before + 1:
+                termination_target, termination_args = cancellation_threads[-1]
+                app._terminate_process = lambda _process: True  # type: ignore[method-assign]
+                try:
+                    termination_target(*termination_args)  # type: ignore[operator]
+                finally:
+                    del app._terminate_process
+            worker_thread.join(5)
+            cancellation_contract["cancel_during_popen_race_dispatches_once"] = (
+                entered_before_cancel
+                and no_early_terminator
+                and not worker_thread.is_alive()
+                and barrier_attempt.cancel_event.is_set()
+                and len(cancellation_threads) == barrier_threads_before + 1
+                and getattr(cancellation_threads[-1][0], "__name__", "") == "_cancel_worker"
+                and cancellation_threads[-1][1][0] is barrier_attempt
+                and cancellation_threads[-1][1][1] is barrier_process
+            )
+        finally:
+            barrier_release.set()
+            subprocess.Popen = original_popen  # type: ignore[assignment]
+            clear_contract_events()
+
+        failed_cancel_reading = threading.Event()
+        failed_cancel_release = threading.Event()
+
+        class BlockingFailureOutput:
+            def __iter__(self) -> BlockingFailureOutput:
+                return self
+
+            @staticmethod
+            def __next__() -> str:
+                failed_cancel_reading.set()
+                if not failed_cancel_release.wait(5):
+                    raise TimeoutError("synthetic natural-exit barrier timed out")
+                raise StopIteration
+
+        class FakeNaturalExitProcess:
+            pid = 4646
+
+            def __init__(self) -> None:
+                self.stdout = BlockingFailureOutput()
+                self.alive = True
+
+            def poll(self) -> int | None:
+                return None if self.alive else 0
+
+            def wait(self, timeout: float | None = None) -> int:
+                del timeout
+                self.alive = False
+                return 0
+
+        natural_exit_process = FakeNaturalExitProcess()
+        natural_exit_worker: threading.Thread | None = None
+        try:
+            subprocess.Popen = lambda *_args, **_kwargs: natural_exit_process  # type: ignore[assignment]
+            natural_exit_attempt = DownloadAttempt(9007, ["synthetic"], "video", existing_contract_file.parent)
+            app.active_attempt = natural_exit_attempt
+            app._set_busy_state(True)
+            failure_threads_before = len(cancellation_threads)
+            natural_exit_worker = original_thread(
+                target=app._download_worker,
+                args=(natural_exit_attempt,),
+                daemon=True,
+            )
+            natural_exit_worker.start()
+            reading_before_cancel = failed_cancel_reading.wait(5)
+            app.cancel_download()
+            failure_dispatched = len(cancellation_threads) == failure_threads_before + 1
+            if failure_dispatched:
+                failure_target, failure_args = cancellation_threads[-1]
+                app._terminate_process = lambda _process: False  # type: ignore[method-assign]
+                try:
+                    failure_target(*failure_args)  # type: ignore[operator]
+                finally:
+                    del app._terminate_process
+            app._poll_events()
+            retry_was_available = (
+                app.active_attempt is natural_exit_attempt
+                and app.busy
+                and str(app.cancel_button.cget("state")) == "normal"
+            )
+            failed_cancel_release.set()
+            natural_exit_worker.join(5)
+            app._poll_events()
+            cancellation_contract["failed_cancel_then_exit_has_terminal_state"] = (
+                reading_before_cancel
+                and failure_dispatched
+                and retry_was_available
+                and not natural_exit_worker.is_alive()
+                and app.active_attempt is None
+                and not app.busy
+                and app.status_var.get() == "Could not stop the downloader safely"
+                and app.diagnostics.read_state().get("error_kind") == "cancel_failed"
+            )
+        finally:
+            failed_cancel_release.set()
+            if natural_exit_worker is not None:
+                natural_exit_worker.join(5)
+            subprocess.Popen = original_popen  # type: ignore[assignment]
+            if "_terminate_process" in app.__dict__:
+                del app._terminate_process
+            clear_contract_events()
+
+        canceled_result_attempt = DownloadAttempt(9011, [], "video", existing_contract_file.parent)
+        canceled_result_attempt.cancel_event.set()
+        canceled_result_attempt.state = "exited"
+        canceled_result_attempt.result_path = existing_contract_file
+        app.active_output_folder = existing_contract_file.parent
+        app.active_attempt = canceled_result_attempt
+        app._set_busy_state(True)
+        app.close_after_cancel = False
+        app._finish_download(canceled_result_attempt, -2)
+        canceled_reveal_target, canceled_reveal_mode = result_reveal_target(
+            app.last_result,
+            app.active_output_folder,
+            app.folder_var.get(),
+        )
+        cancellation_contract["canceled_result_opens_folder_not_partial_file"] = (
+            app.last_result is None
+            and str(app.open_button.cget("text")) == "Open save folder"
+            and canceled_reveal_target == existing_contract_file.parent
+            and canceled_reveal_mode == "open_active_output_folder"
+        )
+
+        close_failure_attempt = DownloadAttempt(9009, [], "video", existing_contract_file.parent)
+        close_failure_attempt.cancel_event.set()
+        close_failure_attempt.state = "exited"
+        close_failure_attempt.detected_error_kind = "cancel_failed"
+        close_failure_attempt.result_path = existing_contract_file
+        app.active_output_folder = existing_contract_file.parent
+        app.active_attempt = close_failure_attempt
+        app._set_busy_state(True)
+        app.close_after_cancel = True
+        app._finish_download(
+            close_failure_attempt,
+            -1,
+            "Could not verify that every downloader child process stopped.",
+        )
+        root.update_idletasks()
+        failed_reveal_target, failed_reveal_mode = result_reveal_target(
+            app.last_result,
+            app.active_output_folder,
+            app.folder_var.get(),
+        )
+        cancellation_contract["failed_cancel_keeps_warning_window_open"] = (
+            app.close_after_cancel is False
+            and app.active_attempt is None
+            and not app.busy
+            and root.winfo_exists() == 1
+            and app.status_var.get() == "Could not stop the downloader safely"
+            and app.diagnostics.read_state().get("error_kind") == "cancel_failed"
+        )
+        cancellation_contract["failed_result_opens_folder_not_partial_file"] = (
+            app.last_result is None
+            and str(app.open_button.cget("text")) == "Open save folder"
+            and failed_reveal_target == existing_contract_file.parent
+            and failed_reveal_mode == "open_active_output_folder"
+        )
+
+        class FakeFailedTaskkillResult:
+            returncode = 1
+
+        class FakeFallbackProcess:
+            pid = 9101
+
+            @staticmethod
+            def poll() -> int | None:
+                return None if 9101 in fallback_alive else 1
+
+            @staticmethod
+            def wait(timeout: float | None = None) -> int:
+                if 9101 in fallback_alive:
+                    raise subprocess.TimeoutExpired("synthetic", timeout)
+                return 1
+
+            @staticmethod
+            def kill() -> None:
+                fallback_alive.discard(9101)
+
+        fallback_alive = {9101, 9102}
+        fallback_forced: list[int] = []
+        fallback_taskkill_calls: list[object] = []
+        original_run = subprocess.run
+        original_tree_snapshot = globals()["windows_process_tree_snapshot"]
+        original_process_status = globals()["windows_process_status"]
+        original_force_terminate = globals()["windows_force_terminate_process"]
+
+        def fake_failed_taskkill(*args: object, **_kwargs: object) -> FakeFailedTaskkillResult:
+            fallback_taskkill_calls.append(args)
+            return FakeFailedTaskkillResult()
+
+        def fake_force_terminate(process_id: int) -> bool:
+            fallback_forced.append(process_id)
+            fallback_alive.discard(process_id)
+            return True
+
+        try:
+            subprocess.run = fake_failed_taskkill  # type: ignore[assignment]
+            globals()["windows_process_tree_snapshot"] = lambda _root: ([9102], True)
+            globals()["windows_process_status"] = lambda process_id: process_id in fallback_alive
+            globals()["windows_force_terminate_process"] = fake_force_terminate
+            fallback_succeeded = DownloaderApp._terminate_process(FakeFallbackProcess())  # type: ignore[arg-type]
+            cancellation_contract["taskkill_failure_uses_verified_fallback"] = (
+                fallback_succeeded
+                and bool(fallback_taskkill_calls)
+                and fallback_forced == [9102]
+                and not fallback_alive
+            )
+
+            class FakeUnqueryableRootProcess:
+                pid = 9201
+
+                @staticmethod
+                def poll() -> None:
+                    return None
+
+                @staticmethod
+                def wait(timeout: float | None = None) -> int:
+                    raise subprocess.TimeoutExpired("synthetic", timeout)
+
+                @staticmethod
+                def kill() -> None:
+                    return None
+
+            globals()["windows_process_tree_snapshot"] = lambda _root: ([], True)
+            globals()["windows_process_status"] = lambda _process_id: False
+            globals()["windows_force_terminate_process"] = lambda _process_id: True
+            cancellation_contract["live_root_handle_prevents_false_success"] = not DownloaderApp._terminate_process(  # type: ignore[arg-type]
+                FakeUnqueryableRootProcess()
+            )
+
+            class FakeAlreadyExitedRootProcess:
+                pid = 9301
+
+                @staticmethod
+                def poll() -> int:
+                    return 0
+
+            taskkill_calls_before_exited = len(fallback_taskkill_calls)
+            cancellation_contract["exited_root_pid_is_never_reused"] = (
+                not DownloaderApp._terminate_process(FakeAlreadyExitedRootProcess())  # type: ignore[arg-type]
+                and len(fallback_taskkill_calls) == taskkill_calls_before_exited
+            )
+        finally:
+            subprocess.run = original_run  # type: ignore[assignment]
+            globals()["windows_process_tree_snapshot"] = original_tree_snapshot
+            globals()["windows_process_status"] = original_process_status
+            globals()["windows_force_terminate_process"] = original_force_terminate
+
+        current_attempt = DownloadAttempt(9004, [], "video", existing_contract_file.parent)
+        app.active_attempt = current_attempt
+        app._set_busy_state(True)
+        app.status_var.set("Current attempt intact")
+        app.record_state(force=True, phase="contract_current", attempt_id=9004, message="Current attempt")
+        app.events.put((9002, "cancel_failed", "stale cancellation failure"))
+        app.events.put((9002, "done", 0))
+        app.events.put((9002, "error", "stale worker error"))
+        app.events.put((9002, "progress", (99.0, "fast", "0")))
+        app._poll_events()
+        cancellation_contract.update(
+            {
+                "stale_events_are_ignored": (
+                    app.active_attempt is current_attempt
+                    and app.status_var.get() == "Current attempt intact"
+                    and app.diagnostics.read_state().get("attempt_id") == 9004
+                ),
+            }
+        )
+    finally:
+        threading.Thread = original_thread
+        clear_contract_events()
+        app.active_attempt = None
+        app._set_busy_state(False)
+
     url_actions = {
         "control_keypress": bool(app.url_entry.bind("<Control-KeyPress>")),
         "shift_insert": bool(app.url_entry.bind("<Shift-Insert>")),
@@ -2732,6 +4176,9 @@ def ui_contract(report_file: str | None = None) -> int:
     english_interface = {
         "media_type": initial["media_type"] == MEDIA_VIDEO_LABEL,
         "download_button": initial["download_button"] == "Download",
+        "folder_button": initial["folder_button"] == "Choose folder…",
+        "open_folder_button": initial["open_folder_button"] == "Open save folder",
+        "cancel_button": initial["cancel_button"] == "Cancel download",
         "paste_button": str(app.paste_button.cget("text")) == "Paste",
         "advanced_button": str(app.advanced_button.cget("text")) == "▾ Advanced options",
         "cookie_sources": initial["cookie_sources"][0] == COOKIE_NONE_LABEL and initial["cookie_sources"][-1] == COOKIE_FILE_LABEL,
@@ -2758,6 +4205,9 @@ def ui_contract(report_file: str | None = None) -> int:
         "callbacks": callbacks,
         "browser_process_policy": process_policy,
         "attempt_state_hygiene": state_hygiene,
+        "folder_resolution_contract": folder_resolution_contract,
+        "result_reveal_contract": result_reveal_contract,
+        "cancellation_contract": cancellation_contract,
         "cookies_file_recovery_cancel": recovery_cancel,
         "cookies_file_recovery_success": recovery_success,
         "false_lock_regression": false_lock_regression,
@@ -2781,6 +4231,9 @@ def ui_contract(report_file: str | None = None) -> int:
             and all(callbacks.values())
             and all(process_policy.values())
             and all(state_hygiene.values())
+            and all(folder_resolution_contract.values())
+            and all(result_reveal_contract.values())
+            and all(cancellation_contract.values())
             and all(recovery_cancel.values())
             and all(recovery_success.values())
             and all(false_lock_regression.values())
@@ -2829,6 +4282,11 @@ def diagnostic_error_message(error_kind: str, *, has_browser: bool = False, has_
         return "Sign-in is required. Select a browser profile or cookies.txt under Advanced options."
     if error_kind == "video_unavailable":
         return "This media is unavailable to the selected account or has been removed."
+    if error_kind == "cancel_failed":
+        return (
+            "TubePort could not verify that every downloader process stopped. "
+            "Check Task Manager before closing the application, then retry Cancel download."
+        )
     return "The download did not finish. Open the diagnostic report for the exact error code and last error line."
 
 
@@ -3139,6 +4597,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog=APP_NAME, description="Portable YouTube and Instagram media downloader")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--url-input-self-test", action="store_true")
+    parser.add_argument("--cancellation-self-test", action="store_true")
     parser.add_argument("--ui-self-test", action="store_true")
     parser.add_argument("--bundle-self-test", action="store_true")
     parser.add_argument("--ui-contract", action="store_true")
@@ -3156,6 +4615,8 @@ def main() -> int:
         parser.error("--browser-profile requires --cookies-browser")
     if args.url_input_self_test:
         return url_input_self_test(args.report_file)
+    if args.cancellation_self_test:
+        return cancellation_self_test(args.report_file)
     if args.self_test:
         return self_test(args.report_file)
     if args.ui_self_test:

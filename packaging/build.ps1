@@ -39,6 +39,22 @@ function Assert-LastExitCode([string]$Step) {
     }
 }
 
+function Test-AllContractChecks([object]$Contract) {
+    if ($null -eq $Contract) {
+        return $false
+    }
+    $properties = @($Contract.PSObject.Properties)
+    if ($properties.Count -eq 0) {
+        return $false
+    }
+    foreach ($property in $properties) {
+        if (![bool]$property.Value) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Invoke-GuiExecutableAndWait(
     [string]$FilePath,
     [string[]]$Arguments,
@@ -119,6 +135,8 @@ Assert-LastExitCode 'Installing build dependencies'
 Assert-LastExitCode 'Compiling the source'
 & $python (Join-Path $projectRoot 'src\TubePort.pyw') --url-input-self-test --report-file (Join-Path $reportsRoot 'source-url-input.json')
 Assert-LastExitCode 'Running the source URL-input self-test'
+& $python (Join-Path $projectRoot 'src\TubePort.pyw') --cancellation-self-test --report-file (Join-Path $reportsRoot 'source-cancellation.json')
+Assert-LastExitCode 'Running the source process-tree cancellation self-test'
 
 & $python -m PyInstaller --noconfirm --clean --distpath $pyInstallerDist --workpath $pyInstallerWork (Join-Path $projectRoot 'packaging\TubePort.spec')
 Assert-LastExitCode 'Building TubePort with PyInstaller'
@@ -132,6 +150,7 @@ Assert-LastExitCode 'Assembling the bootstrap package'
 
 $packageExe = Join-Path $packageRoot 'TubePort.exe'
 $packageInputReport = Join-Path $reportsRoot 'package-url-input.json'
+$packageCancellationReport = Join-Path $reportsRoot 'package-cancellation.json'
 $packageUiReport = Join-Path $reportsRoot 'package-ui-contract.json'
 Invoke-GuiExecutableAndWait `
     -FilePath $packageExe `
@@ -139,13 +158,19 @@ Invoke-GuiExecutableAndWait `
     -Step 'Running the packaged URL-input self-test'
 Invoke-GuiExecutableAndWait `
     -FilePath $packageExe `
+    -Arguments @('--cancellation-self-test', '--report-file', $packageCancellationReport) `
+    -Step 'Running the packaged process-tree cancellation self-test'
+Invoke-GuiExecutableAndWait `
+    -FilePath $packageExe `
     -Arguments @('--ui-contract', '--report-file', $packageUiReport) `
     -Step 'Running the packaged UI contract'
 
 $sourceInput = Get-Content -LiteralPath (Join-Path $reportsRoot 'source-url-input.json') -Raw | ConvertFrom-Json
+$sourceCancellation = Get-Content -LiteralPath (Join-Path $reportsRoot 'source-cancellation.json') -Raw | ConvertFrom-Json
 $packageInput = Get-Content -LiteralPath $packageInputReport -Raw | ConvertFrom-Json
+$packageCancellation = Get-Content -LiteralPath $packageCancellationReport -Raw | ConvertFrom-Json
 $packageUi = Get-Content -LiteralPath $packageUiReport -Raw | ConvertFrom-Json
-if (!$sourceInput.ok -or !$packageInput.ok -or !$packageUi.ok) {
+if (!$sourceInput.ok -or !$sourceCancellation.ok -or !$packageInput.ok -or !$packageCancellation.ok -or !$packageUi.ok) {
     throw 'One or more verification reports returned ok=false.'
 }
 if ([string]$packageUi.app_version -ne $version) {
@@ -157,6 +182,12 @@ if (
     !$packageUi.gui_auth_contract.firefox_matches_detection
 ) {
     throw 'The packaged Windows authentication-source policy is invalid.'
+}
+$folderResolutionOk = Test-AllContractChecks $packageUi.folder_resolution_contract
+$resultRevealOk = Test-AllContractChecks $packageUi.result_reveal_contract
+$attemptCancellationOk = Test-AllContractChecks $packageUi.cancellation_contract
+if (!$folderResolutionOk -or !$resultRevealOk -or !$attemptCancellationOk) {
+    throw 'The packaged save-location or cancellation contract is invalid.'
 }
 
 $verification = [ordered]@{
@@ -170,7 +201,9 @@ $verification = [ordered]@{
     checks = [ordered]@{
         python_compile = $true
         source_url_input_self_test = $true
+        source_process_tree_cancellation = [bool]$sourceCancellation.ok
         packaged_url_input_self_test = $true
+        packaged_process_tree_cancellation = [bool]$packageCancellation.ok
         packaged_ui_contract = $true
         english_interface_contract = [bool]$packageUi.english_interface.no_cyrillic
         authentication_source_selection = [bool]$packageUi.english_interface.cookie_sources
@@ -179,6 +212,9 @@ $verification = [ordered]@{
             $packageUi.gui_auth_contract.chromium_hidden_on_windows -and
             $packageUi.gui_auth_contract.firefox_matches_detection
         )
+        windows_known_folder_resolution = [bool]$folderResolutionOk
+        downloaded_result_reveal_policy = [bool]$resultRevealOk
+        attempt_scoped_cancellation = [bool]$attemptCancellationOk
     }
 }
 [IO.File]::WriteAllText(

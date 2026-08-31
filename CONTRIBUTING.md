@@ -48,6 +48,8 @@ Run at least these deterministic checks before submitting a pull request:
 ```powershell
 python -m py_compile .\src\TubePort.pyw
 python .\src\TubePort.pyw --url-input-self-test
+python .\src\TubePort.pyw --cancellation-self-test
+python .\src\TubePort.pyw --ui-contract
 ```
 
 When yt-dlp, FFmpeg, and a JavaScript runtime are available, also run:

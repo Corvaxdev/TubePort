@@ -40,7 +40,11 @@ jobs:
         shell: pwsh
         run: python .\src\TubePort.pyw --url-input-self-test
 
-      - name: Test the English UI contract
+      - name: Test process-tree cancellation
+        shell: pwsh
+        run: python .\src\TubePort.pyw --cancellation-self-test
+
+      - name: Test the English UI, save-location, and attempt contracts
         shell: pwsh
         run: python .\src\TubePort.pyw --ui-contract
 

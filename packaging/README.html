@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TubePort 2.1.3 — Quick Start</title>
+  <title>TubePort 2.1.4 — Quick Start</title>
   <style>
     :root { color-scheme: light; --ink:#15213a; --muted:#66728a; --paper:#fff; --wash:#f3f5fa; --accent:#ef5a78; --mint:#45bfae; --line:#e3e7ef; }
     * { box-sizing:border-box; }
@@ -32,7 +32,7 @@
   <header>
     <h1>TubePort</h1>
     <p>A portable app for saving video and audio.</p>
-    <span class="badge">Version 2.1.3 · Windows 10/11 x64</span>
+    <span class="badge">Version 2.1.4 · Windows 10/11 x64</span>
   </header>
 
   <section>
@@ -41,8 +41,19 @@
       <li>Extract the entire ZIP archive to a regular folder. Do not run the EXE directly from the archive.</li>
       <li>Run <code>Setup-Tools.cmd</code> once while connected to the internet. It downloads pinned upstream tools and verifies their SHA-256 hashes.</li>
       <li>Open <code>TubePort.exe</code>. No Python installation or administrator privileges are required.</li>
-      <li>Paste a URL, choose the quality and format, select a destination folder, and click “Download.”</li>
+      <li>Paste a URL, choose the quality and format, confirm the destination folder, and click “Download.”</li>
     </ol>
+  </section>
+
+  <section>
+    <h2>Save location and download controls</h2>
+    <ul>
+      <li>TubePort resolves the current Windows Downloads Known Folder, including a location redirected by Windows or the user. Registry and profile-directory fallbacks are used when the Known Folder API is unavailable.</li>
+      <li>File Explorer may display the localized name “Загрузки” while the physical path is named <code>Downloads</code>. That does not mean there are two folders.</li>
+      <li><strong>Choose folder…</strong> is a directory picker, so it intentionally shows folders and hides files.</li>
+      <li><strong>Open save folder</strong> opens the active destination. After a successful download, the button becomes <strong>Show downloaded file</strong> and selects the exact result in File Explorer.</li>
+      <li><strong>Cancel download</strong> stops the active downloader process tree and reports the attempt as canceled. Existing unrelated files are never deleted; a downloader-created partial file may remain.</li>
+    </ul>
   </section>
 
   <section>
@@ -85,6 +96,8 @@
     <p><code>.\TubePort.exe --bundle-self-test --report-file .\bundle-report.json</code></p>
     <p>To check a specific URL without downloading it:</p>
     <p><code>.\TubePort.exe --debug-probe "URL" --report-file .\probe-report.json</code></p>
+    <p>To verify process-tree cancellation without downloading media:</p>
+    <p><code>.\TubePort.exe --cancellation-self-test --report-file .\cancellation-report.json</code></p>
     <p>Current user logs are stored in <code>%LOCALAPPDATA%\TubePort\logs</code>. The “Copy report” button redacts the home-directory path and URL parameters.</p>
     <p>The factory verification results for this build are stored in <code>VERIFICATION.json</code>.</p>
   </section>
@@ -99,7 +112,7 @@
     </ul>
   </section>
 
-  <footer>TubePort 2.1.3 · MIT-licensed bootstrap build · Third-party licenses are in the <code>licenses</code> folder.</footer>
+  <footer>TubePort 2.1.4 · MIT-licensed bootstrap build · Third-party licenses are in the <code>licenses</code> folder.</footer>
 </main>
 </body>
 </html>

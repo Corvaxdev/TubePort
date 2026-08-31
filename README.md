@@ -13,7 +13,7 @@ audio from supported YouTube video URLs and Instagram Reel URLs. It provides a
 small graphical interface over locally installed command-line media tools and includes
 local diagnostics for common authentication and packaging failures.
 
-Current version: **2.1.3**
+Current version: **2.1.4**
 Supported release platform: **Windows 10/11 x64**
 
 > [!IMPORTANT]
@@ -38,6 +38,12 @@ Supported release platform: **Windows 10/11 x64**
   unreliable outside the browser
 - Native paste behavior, including Ctrl+V under non-English Windows keyboard
   layouts, Shift+Insert, and the context menu
+- Portable save-location discovery through the Windows Downloads Known Folder,
+  including redirected and localized user folders
+- Unambiguous folder controls that open the selected destination and, after a
+  successful download, select the exact result in File Explorer
+- Attempt-scoped cancellation that stops the active downloader process tree
+  without allowing stale events to affect a later download
 - Local diagnostics that distinguish browser database locks, Chromium
   App-Bound/DPAPI decryption failures, missing profiles, invalid cookie files,
   and sign-in requirements
@@ -58,11 +64,34 @@ authenticated session even for links that appear public in a signed-in browser.
    downloaded tool against `TOOLS.lock.json`.
 5. Run `TubePort.exe`.
 6. Paste a supported link, choose the media type, quality, format, and output
-   folder, then select **Download**.
+   folder, then select **Download**. Use **Cancel download** if you need to stop
+   the active attempt before it finishes.
 
 Do not run the executable directly inside the ZIP. Keep `TubePort.exe`, the
 `_internal` directory, and—after setup—the `tools` directory together. Once
 setup is complete, that folder can be copied to another Windows x64 machine.
+
+## Save location and download controls
+
+TubePort selects the current Windows Downloads Known Folder by default through
+the Windows Known Folder API. This follows a Downloads location redirected by
+Windows or the user; registry and profile-directory fallbacks are available if
+the API cannot resolve it. File Explorer may display a localized name such as
+**Загрузки** while the physical directory is named `Downloads`. Those labels do
+not by themselves indicate two separate folders.
+
+**Choose folder…** opens a directory picker. It intentionally shows folders and
+hides files because its only purpose is to choose a destination. **Open save
+folder** opens the destination currently used by the attempt. After a successful
+download, that button becomes **Show downloaded file** and selects the exact
+result in File Explorer.
+
+While a download is active, **Cancel download** moves the attempt immediately to
+the canceling state and stops its downloader process tree. Completion and cancel
+events belong to a single attempt, so a late event from an earlier attempt cannot
+change the state of a later one. TubePort does not remove unrelated or
+pre-existing files when canceling; a partial file created by the downloader may
+remain.
 
 ## Authentication
 
@@ -135,10 +164,16 @@ Run the deterministic source checks with:
 ```powershell
 python -m py_compile .\src\TubePort.pyw
 python .\src\TubePort.pyw --url-input-self-test
+python .\src\TubePort.pyw --cancellation-self-test
+python .\src\TubePort.pyw --ui-contract
 python .\src\TubePort.pyw --self-test
 ```
 
-The broader `--self-test` reports the locally discovered yt-dlp, FFmpeg,
+The cancellation check owns a harmless local process tree, stops it, confirms
+that neither the parent nor child survived, and removes its marker file. The UI
+contract verifies Known Folder resolution, result reveal behavior, per-attempt
+state isolation, and English interface strings. The broader `--self-test`
+reports the locally discovered yt-dlp, FFmpeg,
 JavaScript runtime, authentication-source inventory, and command contract. It
 is expected to report missing optional tools on an incomplete development
 machine.
