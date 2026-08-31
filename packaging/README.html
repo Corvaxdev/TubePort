@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TubePort 2.1.1 — Quick Start</title>
+  <style>
+    :root { color-scheme: light; --ink:#15213a; --muted:#66728a; --paper:#fff; --wash:#f3f5fa; --accent:#ef5a78; --mint:#45bfae; --line:#e3e7ef; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--wash); color:var(--ink); font:16px/1.55 "Segoe UI",system-ui,sans-serif; }
+    main { max-width:900px; margin:48px auto; padding:0 24px 64px; }
+    header { padding:38px 40px; border-radius:24px; color:#fff; background:linear-gradient(135deg,#192945,#0b1124); box-shadow:0 22px 55px #16213a22; }
+    h1 { margin:0; font-size:42px; letter-spacing:-1.2px; }
+    header p { margin:8px 0 0; color:#cbd4e5; }
+    .badge { display:inline-block; margin-top:20px; padding:6px 10px; border-radius:999px; background:#ffffff16; color:#fff; font-size:13px; }
+    section { margin-top:18px; padding:26px 30px; border:1px solid var(--line); border-radius:18px; background:var(--paper); }
+    h2 { margin:0 0 14px; font-size:21px; }
+    ol,ul { margin:8px 0 0; padding-left:24px; }
+    li+li { margin-top:8px; }
+    code { padding:2px 6px; border-radius:6px; background:#eef1f6; font:14px Consolas,monospace; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; }
+    .mini { padding:18px; border:1px solid var(--line); border-radius:14px; }
+    .mini strong { display:block; margin-bottom:6px; }
+    .note { border-left:4px solid var(--mint); }
+    .warn { border-left:4px solid var(--accent); }
+    a { color:#2857b8; }
+    footer { margin-top:22px; color:var(--muted); font-size:13px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>TubePort</h1>
+    <p>A portable app for saving video and audio.</p>
+    <span class="badge">Version 2.1.1 · Windows 10/11 x64</span>
+  </header>
+
+  <section>
+    <h2>Up and running in one minute</h2>
+    <ol>
+      <li>Extract the entire ZIP archive to a regular folder. Do not run the EXE directly from the archive.</li>
+      <li>Run <code>Setup-Tools.cmd</code> once while connected to the internet. It downloads pinned upstream tools and verifies their SHA-256 hashes.</li>
+      <li>Open <code>TubePort.exe</code>. No Python installation or administrator privileges are required.</li>
+      <li>Paste a URL, choose the quality and format, select a destination folder, and click “Download.”</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>What is included</h2>
+    <div class="grid">
+      <div class="mini"><strong>Verified setup</strong><code>Setup-Tools.cmd</code> retrieves yt-dlp, Deno, FFmpeg, and ffprobe from pinned upstream releases.</div>
+      <div class="mini"><strong>Portable after setup</strong>Once the <code>tools</code> folder exists, you can carry the complete folder on a USB drive or copy it to another Windows computer.</div>
+      <div class="mini"><strong>Auditable package</strong>Expected tool hashes are in <code>TOOLS.lock.json</code>; application hashes are in <code>SHA256SUMS.txt</code>.</div>
+    </div>
+  </section>
+
+  <section class="note">
+    <h2>Videos that require sign-in</h2>
+    <p>TubePort never asks for a username or password. Sign in to YouTube or Instagram on the official website in your regular browser, then select that browser and the appropriate profile under “Advanced options.” Google Chrome, Microsoft Edge, Brave, Vivaldi, Opera, Chromium, Mozilla Firefox, and Whale are supported.</p>
+    <p>If the browser has multiple profiles, select the one signed in to the required account. For age-restricted YouTube videos, age must also be verified in that specific profile. A session from another profile will not grant access, even if you selected the correct browser.</p>
+  </section>
+
+  <section>
+    <h2>Two ways to provide authentication</h2>
+    <div class="grid">
+      <div class="mini"><strong>Browser profile</strong>TubePort asks yt-dlp to read cookies from the selected profile on this computer. Your username and password are never passed to the application.</div>
+      <div class="mini"><strong>cookies.txt file</strong>If profile access does not work, select your own cookie file in Mozilla/Netscape format. A JSON export is not compatible.</div>
+    </div>
+    <p>A <code>cookies.txt</code> file effectively grants access to an active account session. Do not share it with anyone, upload it to public cloud storage, or keep it after it is no longer needed. Cookies are not included in the portable TubePort package.</p>
+  </section>
+
+  <section class="warn">
+    <h2>Chrome and other Chromium browser limitations on Windows</h2>
+    <p>Chrome and some current Chromium-based browsers protect cookies with App-Bound Encryption. These values use the <code>v20</code> format and may be inaccessible to yt-dlp when it reads a regular browser profile from another application.</p>
+    <ul>
+      <li>A “failed to copy the cookie database” message usually means that the browser has the file open. Close all of its windows and background processes completely, then try again.</li>
+      <li>A decryption error mentioning <code>DPAPI</code>, <code>v20</code>, or <code>App-Bound</code> is a different issue. Closing the browser will not resolve it: use a fresh <code>cookies.txt</code> file or another supported browser.</li>
+      <li>Do not run TubePort as an administrator or disable browser security to extract cookies.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Diagnostics without using the interface</h2>
+    <p>In the app, open “Diagnostics and log.” To verify the package automatically, run the following command in PowerShell from the TubePort folder:</p>
+    <p><code>.\TubePort.exe --bundle-self-test --report-file .\bundle-report.json</code></p>
+    <p>To check a specific URL without downloading it:</p>
+    <p><code>.\TubePort.exe --debug-probe "URL" --report-file .\probe-report.json</code></p>
+    <p>Current user logs are stored in <code>%LOCALAPPDATA%\TubePort\logs</code>. The “Copy report” button redacts the home-directory path and URL parameters.</p>
+    <p>The factory verification results for this build are stored in <code>VERIFICATION.json</code>.</p>
+  </section>
+
+  <section class="warn">
+    <h2>Important</h2>
+    <ul>
+      <li>Download only material that you have the right to use, and follow the service’s rules.</li>
+      <li>Never enter your YouTube, Google, or Instagram password in TubePort. Sign-in must take place only on the official website in your browser.</li>
+      <li>This build is not digitally signed. Windows SmartScreen may display a warning the first time you run it.</li>
+      <li>Do not remove the EXE from its folder: the <code>_internal</code> directory and, after setup, the <code>tools</code> directory must remain beside it.</li>
+    </ul>
+  </section>
+
+  <footer>TubePort 2.1.1 · MIT-licensed bootstrap build · Third-party licenses are in the <code>licenses</code> folder.</footer>
+</main>
+</body>
+</html>

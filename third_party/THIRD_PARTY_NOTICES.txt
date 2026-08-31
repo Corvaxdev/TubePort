@@ -1,0 +1,107 @@
+THIRD-PARTY SOFTWARE NOTICES
+============================
+
+TubePort itself is licensed under the MIT License. The public bootstrap ZIP
+does not redistribute yt-dlp, Deno, or FFmpeg executables. Setup-Tools.ps1
+retrieves pinned, unmodified artifacts directly from each upstream release and
+verifies their SHA-256 digests before placing them in the local tools folder.
+
+yt-dlp 2026.08.19
+-----------------
+
+Project: https://github.com/yt-dlp/yt-dlp
+Source: https://github.com/yt-dlp/yt-dlp/tree/2026.08.19
+Binary: https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe
+
+The yt-dlp project source is made available under the Unlicense. Upstream
+states that its PyInstaller-bundled Windows executable contains components
+under additional licenses, including GPL-3.0-or-later. See:
+
+  licenses/LICENSE-yt-dlp-2026.08.19.txt
+  licenses/THIRD_PARTY_LICENSES-yt-dlp-2026.08.19.txt
+
+Deno 2.9.6
+-----------
+
+Project: https://github.com/denoland/deno
+Source: https://github.com/denoland/deno/tree/v2.9.6
+License: MIT
+License file: licenses/LICENSE-Deno-2.9.6.txt
+
+FFmpeg 8.1.1 essentials build from gyan.dev
+------------------------------------------------
+
+Distributor: https://www.gyan.dev/ffmpeg/builds/
+Binary release: https://github.com/GyanD/codexffmpeg/releases/tag/8.1.1
+FFmpeg source commit: https://github.com/FFmpeg/FFmpeg/commit/239f2c733d
+License stated by distributor: GNU GPL version 3
+
+See:
+
+  licenses/LICENSE-FFmpeg-8.1.1-Gyan-GPLv3.txt
+  licenses/METADATA-FFmpeg-8.1.1-Gyan-README.txt
+
+Python 3.12.10
+--------------
+
+Project: https://www.python.org/
+Source: https://github.com/python/cpython/tree/v3.12.10
+License file: licenses/LICENSE-Python-3.12.10.txt
+
+The packaged Python runtime also includes the components listed below. Their
+individual terms remain in force.
+
+OpenSSL 3.0.16
+--------------
+
+Use in package: _internal/libcrypto-3.dll
+License: Apache License 2.0
+Source: https://github.com/openssl/openssl/tree/openssl-3.0.16
+License file: licenses/LICENSE-OpenSSL-3.0.16.txt
+
+zlib 1.3.1
+----------
+
+Use in package: _internal/zlib1.dll
+License: zlib License
+Source: https://github.com/madler/zlib/tree/v1.3.1
+License file: licenses/LICENSE-zlib-1.3.1.txt
+
+Tcl/Tk 8.6.15
+--------------
+
+Use in package: Tcl/Tk runtime and data used by tkinter
+Source: https://www.tcl-lang.org/software/tcltk/8.6.html
+License file: licenses/LICENSE-TclTk-8.6.15.txt
+
+Microsoft C/C++ Runtime
+-----------------------
+
+Use in package: Visual C++ Runtime 14.42.34438.0 and Universal CRT
+License terms: https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/
+
+sv-ttk 2.6.1
+------------
+
+Project: https://github.com/rdbende/Sun-Valley-ttk-theme
+License: MIT
+License file: licenses/LICENSE-sv-ttk-2.6.1.txt
+
+PyInstaller 6.22.2
+------------------
+
+Project: https://github.com/pyinstaller/pyinstaller
+License: GPL-2.0-or-later with the PyInstaller Bootloader Exception
+License file: licenses/LICENSE-PyInstaller-6.22.2.txt
+
+Pillow 12.3.0
+-------------
+
+Use in project: build-time icon processing; not imported by TubePort at runtime
+License: MIT-CMU
+Source: https://github.com/python-pillow/Pillow/tree/12.3.0
+License file: licenses/LICENSE-Pillow-12.3.0.txt
+
+The complete metadata and expected hashes used by the setup process are in
+COMPONENTS.json and TOOLS.lock.json. The individual upstream license texts
+control if this summary differs from them.

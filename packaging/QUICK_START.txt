@@ -1,0 +1,41 @@
+TubePort 2.1.1 — Quick Start
+================================
+
+1. Extract the entire ZIP archive.
+2. Run Setup-Tools.cmd once while connected to the internet.
+3. Wait for the verified tools to finish downloading.
+4. Run TubePort.exe.
+5. Paste a URL, choose your options, and click “Download.”
+
+You do not need to install Python, yt-dlp, Deno, or FFmpeg manually. The setup
+script downloads pinned upstream releases and verifies every SHA-256 digest
+before placing the tools beside TubePort. Windows 10/11 x64 is supported.
+
+For videos that require sign-in, open “Advanced options” and select the browser
+and profile with an active session. Chrome, Edge, Brave, Vivaldi, Opera,
+Chromium, Firefox, and Whale are supported. For age-restricted YouTube videos,
+age must be verified in the selected profile.
+
+If profile access does not work, select your own cookies.txt file in
+Mozilla/Netscape format. This file is equivalent to an active account session:
+do not share it with anyone, and delete it when it is no longer needed. Cookies
+are not included in the package.
+
+Windows and Chromium:
+- “Failed to copy the cookie database” — completely close the browser, including
+  its background processes, then try again.
+- A decryption error mentioning DPAPI, v20, or App-Bound — closing the browser
+  will not help. Use a fresh cookies.txt file or another supported browser.
+- Do not run TubePort as an administrator or disable browser security.
+
+TubePort never asks for or accepts a username or password. Enter your credentials
+only on the official YouTube, Google, or Instagram website in your regular browser.
+
+Do not run the EXE directly from the ZIP archive or separate it from the
+_internal folder. After setup, keep the tools folder beside it. For detailed
+instructions, see README.html.
+
+Package diagnostics:
+  .\TubePort.exe --bundle-self-test --report-file .\bundle-report.json
+
+Download only material that you have the right to use.

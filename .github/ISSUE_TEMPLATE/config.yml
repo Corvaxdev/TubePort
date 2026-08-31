@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/nanomicron/TubePort/security/advisories/new
+    about: Never place vulnerabilities, cookies, credentials, or private media in a public issue.

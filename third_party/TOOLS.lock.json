@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "platform": "windows-x64",
+  "components": [
+    {
+      "name": "yt-dlp",
+      "version": "2026.08.19",
+      "format": "file",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
+      "sha256": "66674953FE251B89F4D08C5F0E35E0728679BD67AB3D7D05C0562AF101DD3E7A",
+      "executables": [
+        {
+          "name": "yt-dlp.exe",
+          "sha256": "66674953FE251B89F4D08C5F0E35E0728679BD67AB3D7D05C0562AF101DD3E7A"
+        }
+      ],
+      "source": "https://github.com/yt-dlp/yt-dlp/tree/2026.08.19"
+    },
+    {
+      "name": "Deno",
+      "version": "2.9.6",
+      "format": "zip",
+      "url": "https://github.com/denoland/deno/releases/download/v2.9.6/deno-x86_64-pc-windows-msvc.zip",
+      "sha256": "15E5300B0BA3C3695A7621D90160A746EC9E710228CEE639AFA9D580F6E3CD11",
+      "executables": [
+        {
+          "name": "deno.exe",
+          "sha256": "2FF9493DFA356BE2975F477025EA770088E9E9CB2C83D983236D13561B96B7A6"
+        }
+      ],
+      "source": "https://github.com/denoland/deno/tree/v2.9.6"
+    },
+    {
+      "name": "FFmpeg",
+      "version": "8.1.1-essentials_build-www.gyan.dev",
+      "format": "zip",
+      "url": "https://github.com/GyanD/codexffmpeg/releases/download/8.1.1/ffmpeg-8.1.1-essentials_build.zip",
+      "sha256": "6F58CE889F59C311410F7D2B18895B33C03456463486F3B1EBC93D97A0F54541",
+      "executables": [
+        {
+          "name": "ffmpeg.exe",
+          "sha256": "228D7A8556258DE907FDB55F36850078EBC7680B84EC30D84EA02E99BEC1D1EB"
+        },
+        {
+          "name": "ffprobe.exe",
+          "sha256": "0FDE260F5ABD35C9CAFD96F594CC76365A780C1B73A90E35B6A3409EA1DB1BF0"
+        }
+      ],
+      "source": "https://github.com/FFmpeg/FFmpeg/commit/239f2c733d"
+    }
+  ]
+}

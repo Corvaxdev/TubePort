@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+.venv/
+venv/
+
+# Builds and releases
+build/
+dist/
+*.spec.bak
+*.zip
+*.7z
+*.tar.gz
+*.exe
+*.dll
+
+# Downloaded tools and media
+tools/
+downloads/
+*.mp3
+*.m4a
+*.opus
+*.mp4
+*.mkv
+*.webm
+*.part
+*.ytdl
+
+# Authentication and local configuration
+cookies.txt
+*cookies*.txt
+.env
+.env.*
+!.env.example
+
+# Diagnostics and local reports
+logs/
+diagnostics/
+*-report.json
+state-*.json
+app.log
+download-test.log
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
+.DS_Store

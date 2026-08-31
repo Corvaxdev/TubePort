@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a focused improvement to TubePort
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user problem first. Requests to collect credentials, bypass access controls, or facilitate unauthorized copying will not be accepted.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is difficult or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful change from the user's perspective.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy, security, and rights impact
+      description: Explain whether this changes authentication, diagnostics, external requests, or handling of copyrighted/private media.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: This request does not require TubePort to collect passwords or bypass source-site access controls.
+          required: true

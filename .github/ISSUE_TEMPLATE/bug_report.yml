@@ -1,0 +1,97 @@
+name: Bug report
+description: Report a reproducible problem in TubePort
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Do not post cookies, credentials, private media, browser databases, or unredacted logs. Report security issues privately according to SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: TubePort version
+      description: Shown next to the TubePort title and in diagnostics.
+      placeholder: 2.1.1
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2 x64
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How did you run TubePort?
+      options:
+        - Portable release ZIP, fully extracted
+        - From source
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Source platform
+      options:
+        - YouTube
+        - Instagram Reel
+        - Application startup or packaging (no media link)
+    validations:
+      required: true
+  - type: dropdown
+    id: authentication
+    attributes:
+      label: Authentication mode
+      description: Do not name an account or attach authentication data.
+      options:
+        - None
+        - Browser profile
+        - cookies.txt
+        - Not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use a public, non-sensitive sample if a URL is necessary. Otherwise describe only the URL type.
+      placeholder: |
+        1. Extract the release...
+        2. Open TubePort...
+        3. Choose...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Paste only the relevant excerpt after checking it for filenames, profile labels, personal paths, URLs, tokens, and cookies.
+      render: text
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmation
+      options:
+        - label: I tested the latest release.
+          required: true
+        - label: I have not included credentials, cookies, private media, or sensitive account data.
+          required: true
+        - label: I have the right or permission to use any sample media referenced here.
+          required: true

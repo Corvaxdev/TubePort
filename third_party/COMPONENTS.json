@@ -1,0 +1,123 @@
+{
+  "schema": 1,
+  "application": {
+    "name": "TubePort",
+    "version": "2.1.1",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 nanomicron"
+  },
+  "distribution_model": "The public bootstrap archive contains TubePort but not yt-dlp, Deno, or FFmpeg binaries. Setup-Tools downloads pinned upstream artifacts directly to the user's machine and verifies every SHA-256 digest.",
+  "components": [
+    {
+      "name": "yt-dlp",
+      "version": "2026.08.19",
+      "artifact": "tools/yt-dlp.exe",
+      "sha256": "66674953FE251B89F4D08C5F0E35E0728679BD67AB3D7D05C0562AF101DD3E7A",
+      "license_summary": "Unlicense for project source; the upstream PyInstaller executable includes GPL-3.0-or-later components",
+      "source": "https://github.com/yt-dlp/yt-dlp/tree/2026.08.19"
+    },
+    {
+      "name": "Deno",
+      "version": "2.9.6",
+      "artifact": "tools/deno.exe",
+      "sha256": "2FF9493DFA356BE2975F477025EA770088E9E9CB2C83D983236D13561B96B7A6",
+      "license": "MIT",
+      "source": "https://github.com/denoland/deno/tree/v2.9.6"
+    },
+    {
+      "name": "FFmpeg",
+      "version": "8.1.1-essentials_build-www.gyan.dev",
+      "artifacts": [
+        {
+          "path": "tools/ffmpeg.exe",
+          "sha256": "228D7A8556258DE907FDB55F36850078EBC7680B84EC30D84EA02E99BEC1D1EB"
+        },
+        {
+          "path": "tools/ffprobe.exe",
+          "sha256": "0FDE260F5ABD35C9CAFD96F594CC76365A780C1B73A90E35B6A3409EA1DB1BF0"
+        }
+      ],
+      "license": "GPL-3.0",
+      "source": "https://github.com/FFmpeg/FFmpeg/commit/239f2c733d"
+    },
+    {
+      "name": "Python",
+      "version": "3.12.10",
+      "license": "PSF-2.0 and incorporated-component terms",
+      "artifact": "_internal/python312.dll",
+      "sha256": "9A0E3435AAA680D868150F87AB3E388AD2EEBC22F87E036155C7B4EDA8CD2120",
+      "source": "https://github.com/python/cpython/tree/v3.12.10"
+    },
+    {
+      "name": "OpenSSL",
+      "version": "3.0.16",
+      "license": "Apache-2.0",
+      "artifact": "_internal/libcrypto-3.dll",
+      "sha256": "CCFFFDDCD3DEFB8D899026298AF9AF43BC186130F8483D77E97C93233D5F27D7",
+      "source": "https://github.com/openssl/openssl/tree/openssl-3.0.16"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.1",
+      "license": "Zlib",
+      "artifact": "_internal/zlib1.dll",
+      "sha256": "A3A9487DD7A27BE0296731513A5C1D9005BD3ACF5861CCBE0AABCA3984F51C4F",
+      "source": "https://github.com/madler/zlib/tree/v1.3.1"
+    },
+    {
+      "name": "Tcl/Tk",
+      "version": "8.6.15",
+      "license": "Tcl/Tk license",
+      "artifacts": [
+        {
+          "path": "_internal/tcl86t.dll",
+          "sha256": "B894E0C9A7D2B56F9F202DE5044221CFC0938CBD9FFACA6B6793BBA486E28081"
+        },
+        {
+          "path": "_internal/tk86t.dll",
+          "sha256": "3883976D6270C44CF43B0F4E3B925259A36C42F586680A93DFE6A3FDFB5B4939"
+        }
+      ],
+      "source": "https://www.tcl-lang.org/software/tcltk/8.6.html"
+    },
+    {
+      "name": "Microsoft C/C++ Runtime",
+      "version": "14.42.34438.0 / UCRT 10.0.26100.4654",
+      "license_summary": "Microsoft Visual C++ Redistributable and Universal CRT terms",
+      "artifacts": [
+        {
+          "path": "_internal/VCRUNTIME140.dll",
+          "sha256": "052AD6A20D375957E82AA6A3C441EA548D89BE0981516CA7EB306E063D5027F4"
+        },
+        {
+          "path": "_internal/VCRUNTIME140_1.dll",
+          "sha256": "6A99BC0128E0C7D6CBBF615FCC26909565E17D4CA3451B97F8987F9C6ACBC6C8"
+        },
+        {
+          "path": "_internal/ucrtbase.dll",
+          "sha256": "3239227D27667BA20D10A880751924E5719DE0078F9FCE232D149D383F7681F6"
+        }
+      ],
+      "license_terms": "https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/"
+    },
+    {
+      "name": "sv-ttk",
+      "version": "2.6.1",
+      "license": "MIT",
+      "source": "https://github.com/rdbende/Sun-Valley-ttk-theme"
+    },
+    {
+      "name": "PyInstaller",
+      "version": "6.22.2",
+      "license_summary": "GPL-2.0-or-later with the PyInstaller Bootloader Exception",
+      "source": "https://github.com/pyinstaller/pyinstaller/tree/v6.22.2"
+    },
+    {
+      "name": "Pillow",
+      "version": "12.3.0",
+      "usage": "build-time icon processing; not imported by the application",
+      "license": "MIT-CMU",
+      "source": "https://github.com/python-pillow/Pillow/tree/12.3.0"
+    }
+  ]
+}
